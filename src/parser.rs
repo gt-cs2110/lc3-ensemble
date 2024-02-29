@@ -9,14 +9,16 @@ use logos::{Lexer, Logos};
 #[logos(skip r"[ \t]+")]
 pub enum Token {
     /// A numeric value (e.g., `9`, `#9`, `0b1001`, `0x9`, `x9`, `b1001`, etc.)
-    #[regex(r"-?\d+", |lx| lx.slice().parse::<i16>().unwrap())]
-    #[regex(r"#-?\d+", |lx| lx.slice()[1..].parse::<i16>().unwrap())]
-    #[regex(r"0?[Xx]\d+", parse_hex_literal)]
-    #[regex(r"0?[Bb]\d+", parse_bin_literal)]
-    Numeric(i16),
+    #[regex(r"\d+", |lx| lx.slice().parse::<u16>().unwrap())]
+    #[regex(r"#\d+", |lx| lx.slice()[1..].parse::<u16>().unwrap())]
+    #[regex(r"-\d+", |lx| lx.slice().parse::<i16>().unwrap() as u16)]
+    #[regex(r"#-\d+", |lx| lx.slice()[1..].parse::<i16>().unwrap() as u16)]
+    #[regex(r"0?[Xx][\dA-F]+", parse_hex_literal)]
+    #[regex(r"0?[Bb][01]+", parse_bin_literal)]
+    Numeric(u16),
 
     /// A register value (i.e., `R0`-`R7`)
-    #[regex(r"[Rr]\d+", parse_reg)]
+    #[regex(r"[Rr][0-7]", parse_reg)]
     Reg(u8),
 
     /// An identifier. This can refer to either:
@@ -53,19 +55,19 @@ fn parse_reg(lx: &Lexer<'_, Token>) -> u8 {
     }
     regno
 }
-fn parse_hex_literal(lx: &Lexer<'_, Token>) -> i16 {
+fn parse_hex_literal(lx: &Lexer<'_, Token>) -> u16 {
     let Some((_, hex)) = lx.slice().split_once(['X', 'x']) else {
         unreachable!("Lexer slice should have contained an X or x");
     };
 
-    i16::from_str_radix(hex, 16).unwrap()
+    u16::from_str_radix(hex, 16).unwrap()
 }
-fn parse_bin_literal(lx: &Lexer<'_, Token>) -> i16 {
+fn parse_bin_literal(lx: &Lexer<'_, Token>) -> u16 {
     let Some((_, bin)) = lx.slice().split_once(['B', 'b']) else {
         unreachable!("Lexer slice should have contained an B or b");
     };
 
-    i16::from_str_radix(bin, 2).unwrap()
+    u16::from_str_radix(bin, 2).unwrap()
 }
 
 #[cfg(test)]
