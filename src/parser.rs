@@ -2,19 +2,21 @@
 //! This converts an LC3 assembly file into
 //! an AST representation of each instruction.
 
+use std::num::IntErrorKind;
+
 use logos::{Lexer, Logos};
 
 /// A unit of information in LC3 source code.
-#[derive(Debug, Logos)]
-#[logos(skip r"[ \t]+")]
+#[derive(Debug, Logos, PartialEq, Eq)]
+#[logos(skip r"[ \t]+", error = LexErr)]
 pub enum Token {
     /// A numeric value (e.g., `9`, `#9`, `0b1001`, `0x9`, `x9`, `b1001`, etc.)
-    #[regex(r"\d+", |lx| lx.slice().parse::<u16>().unwrap())]
-    #[regex(r"#\d+", |lx| lx.slice()[1..].parse::<u16>().unwrap())]
-    #[regex(r"-\d+", |lx| lx.slice().parse::<i16>().unwrap() as u16)]
-    #[regex(r"#-\d+", |lx| lx.slice()[1..].parse::<i16>().unwrap() as u16)]
-    #[regex(r"0?[Xx][\dA-F]+", parse_hex_literal)]
-    #[regex(r"0?[Bb][01]+", parse_bin_literal)]
+    #[regex(r"\d+", parse_unsigned_dec)]
+    #[regex(r"#\d+", parse_unsigned_dec)]
+    #[regex(r"-\d+", parse_signed_dec)]
+    #[regex(r"#-\d+", parse_signed_dec)]
+    #[regex(r"0?[Xx][\dA-F]+", parse_hex)]
+    #[regex(r"0?[Bb][01]+", parse_bin)]
     Numeric(u16),
 
     /// A register value (i.e., `R0`-`R7`)
@@ -47,27 +49,103 @@ pub enum Token {
     Comment,
 }
 
-fn parse_reg(lx: &Lexer<'_, Token>) -> u8 {
-    let regno: u8 = lx.slice()[1..].parse().unwrap();
-    
-    if regno > 7 {
-        panic!("LC3 does not support register number {regno}");
-    }
-    regno
+/// Any errors raised in attempting to lex an input stream.
+#[derive(Debug, PartialEq, Eq, Clone, Default)]
+pub enum LexErr {
+    /// Numeric literal (unsigned dec, hex, and bin) cannot fit within the range of a u16
+    DoesNotFitU16,
+    /// Numeric literal (signed dec) cannot fit within the range of a i16
+    DoesNotFitI16,
+    /// Hex literal (starting with 0x or x) has invalid hex digits (or there is nothing following)
+    InvalidHex,
+    /// Bin literal (starting with 0b or b) has invalid bin digits (or there is nothing following)
+    InvalidBin,
+    /// Numeric literal could not be parsed as an unsigned dec literal (typically because it's just `#`)
+    InvalidUnsigned,
+    /// Numeric literal could not be parsed as an signed dec literal (typically because it's just `#` or `#-` or `-`)
+    InvalidSigned,
+    /// Int parsing failed but the reason why is unknown
+    UnknownIntErr,
+    /// A symbol was used which is not allowed in LC3 assembly files
+    #[default]
+    InvalidSymbol
 }
-fn parse_hex_literal(lx: &Lexer<'_, Token>) -> u16 {
+
+fn parse_unsigned_dec(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
+    let mut string = lx.slice();
+    if lx.slice().starts_with('#') {
+        string = &string[1..];
+    }
+
+    string.parse::<u16>()
+        .map_err(|e| match e.kind() {
+            IntErrorKind::Empty => LexErr::InvalidUnsigned,
+            IntErrorKind::InvalidDigit => LexErr::InvalidUnsigned,
+            IntErrorKind::PosOverflow => LexErr::DoesNotFitU16,
+            IntErrorKind::NegOverflow => LexErr::DoesNotFitU16,
+            IntErrorKind::Zero => unreachable!("IntErrorKind::Zero should not be emitted in parsing u16"),
+            _ => LexErr::UnknownIntErr,
+        })
+}
+
+fn parse_signed_dec(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
+    let mut string = lx.slice();
+    if lx.slice().starts_with('#') {
+        string = &string[1..];
+    }
+
+    match string.parse::<i16>() {
+        Ok(val) => Ok(val as u16),
+        Err(e) => {
+            let kind = match e.kind() {
+                IntErrorKind::Empty => LexErr::InvalidSigned,
+                IntErrorKind::InvalidDigit => LexErr::InvalidSigned,
+                IntErrorKind::PosOverflow => LexErr::DoesNotFitI16,
+                IntErrorKind::NegOverflow => LexErr::DoesNotFitI16,
+                IntErrorKind::Zero => unreachable!("IntErrorKind::Zero should not be emitted in parsing i16"),
+                _ => LexErr::UnknownIntErr,
+            };
+
+            Err(kind)
+        },
+    }
+}
+fn parse_hex(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
     let Some((_, hex)) = lx.slice().split_once(['X', 'x']) else {
         unreachable!("Lexer slice should have contained an X or x");
     };
 
-    u16::from_str_radix(hex, 16).unwrap()
+    u16::from_str_radix(hex, 16)
+        .map_err(|e| match e.kind() {
+            IntErrorKind::Empty => LexErr::InvalidHex,
+            IntErrorKind::InvalidDigit => LexErr::InvalidHex,
+            IntErrorKind::PosOverflow => LexErr::DoesNotFitI16,
+            IntErrorKind::NegOverflow => LexErr::DoesNotFitI16,
+            IntErrorKind::Zero => unreachable!("IntErrorKind::Zero should not be emitted in parsing u16"),
+            _ => LexErr::UnknownIntErr,
+        })
 }
-fn parse_bin_literal(lx: &Lexer<'_, Token>) -> u16 {
+fn parse_bin(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
     let Some((_, bin)) = lx.slice().split_once(['B', 'b']) else {
         unreachable!("Lexer slice should have contained an B or b");
     };
 
-    u16::from_str_radix(bin, 2).unwrap()
+    u16::from_str_radix(bin, 2)
+        .map_err(|e| match e.kind() {
+            IntErrorKind::Empty => LexErr::InvalidBin,
+            IntErrorKind::InvalidDigit => LexErr::InvalidBin,
+            IntErrorKind::PosOverflow => LexErr::DoesNotFitI16,
+            IntErrorKind::NegOverflow => LexErr::DoesNotFitI16,
+            IntErrorKind::Zero => unreachable!("IntErrorKind::Zero should not be emitted in parsing u16"),
+            _ => LexErr::UnknownIntErr,
+        })
+}
+
+fn parse_reg(lx: &Lexer<'_, Token>) -> u8 {
+    let regno = lx.slice()[1..].parse()
+        .unwrap_or_else(|_| unreachable!("parse_reg should only be called with register 0-7"));
+
+    regno
 }
 
 #[cfg(test)]
@@ -158,6 +236,16 @@ mod test {
         .orig x4000
         .blkw 100
         .end";
+
+        for line in data.lines() {
+            println!("{:?}", Token::lexer(line).collect::<Vec<_>>());
+        }
+    }
+    #[test]
+    fn fib2() {
+        let data = "
+        .blkw 100000
+        .blkw #12ff he";
 
         for line in data.lines() {
             println!("{:?}", Token::lexer(line).collect::<Vec<_>>());
