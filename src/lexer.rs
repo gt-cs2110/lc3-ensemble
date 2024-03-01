@@ -15,7 +15,7 @@ pub enum Token {
     #[regex(r"#\d+", parse_unsigned_dec)]
     #[regex(r"-\d+", parse_signed_dec)]
     #[regex(r"#-\d+", parse_signed_dec)]
-    #[regex(r"0?[Xx][\dA-F]+", parse_hex)]
+    #[regex(r"0?[Xx][\dA-Fa-f]+", parse_hex)]
     #[regex(r"0?[Bb][01]+", parse_bin)]
     Numeric(u16),
 
@@ -46,7 +46,7 @@ pub enum Token {
 
     /// A comment, which starts with a semicolon and spans the remaining part of the line.
     #[regex(r";.*")]
-    Comment,
+    Comment
 }
 
 /// Any errors raised in attempting to lex an input stream.
@@ -245,7 +245,9 @@ mod test {
     fn fib2() {
         let data = "
         .blkw 100000
-        .blkw #12ff he";
+        .blkw #2222 he
+        .blkw x9999 he
+        ";
 
         for line in data.lines() {
             println!("{:?}", Token::lexer(line).collect::<Vec<_>>());
