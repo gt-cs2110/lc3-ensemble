@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use logos::Span;
 
 use crate::lexer::Token;
@@ -19,13 +21,19 @@ enum Instruction {
     Trap(TrapVect8)
 }
 
-type Reg = u8;
-type Imm5 = i8;
+struct Reg(u8);
+impl std::fmt::Display for Reg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "R{}", self.0)
+    }
+}
+
+type Imm5 = Offset<i8, 5>;
 type CondCode = u8;
-type PCOffset9 = PCOffset<i16>;
-type PCOffset11 = PCOffset<i16>;
-type Offset6 = i8;
-type TrapVect8 = u8;
+type Offset6 = Offset<i8, 6>;
+type PCOffset9 = PCOffset<i16, 9>;
+type PCOffset11 = PCOffset<i16, 11>;
+type TrapVect8 = Offset<u8, 8>;
 
 enum ImmOrReg {
     Imm(Imm5),
@@ -34,19 +42,100 @@ enum ImmOrReg {
 impl std::fmt::Display for ImmOrReg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ImmOrReg::Imm(imm) => write!(f, "#{imm}"),
-            ImmOrReg::Reg(reg) => write!(f, "R{reg}"),
+            ImmOrReg::Imm(imm) => imm.fmt(f),
+            ImmOrReg::Reg(reg) => reg.fmt(f),
         }
     }
 }
-enum PCOffset<OFF> {
-    Offset(OFF),
+
+struct Offset<OFF, const N: usize>(OFF);
+
+impl<const N: usize> Offset<u8, N> {
+    fn new(n: u8) -> Result<Self, ParseErr> {
+        match n == (n << (8 - N)) >> (8 - N) {
+            true  => Ok(Offset(n)),
+            false => Err(ParseErr { msg: "value is too big for unsigned 8-bit integer" }),
+        }
+    }
+}
+impl<const N: usize> Offset<i8, N> {
+    fn new(n: i8) -> Result<Self, ParseErr> {
+        match n == (n << (8 - N)) >> (8 - N) {
+            true  => Ok(Offset(n)),
+            false => Err(ParseErr { msg: "value is too big for signed 8-bit integer" }),
+        }
+    }
+}
+impl<const N: usize> Offset<u16, N> {
+    fn new(n: u16) -> Result<Self, ParseErr> {
+        match n == (n << (16 - N)) >> (16 - N) {
+            true  => Ok(Offset(n)),
+            false => Err(ParseErr { msg: "value is too big for unsigned 16-bit integer" }),
+        }
+    }
+}
+impl<const N: usize> Offset<i16, N> {
+    fn new(n: i16) -> Result<Self, ParseErr> {
+        match n == (n << (16 - N)) >> (16 - N) {
+            true  => Ok(Offset(n)),
+            false => Err(ParseErr { msg: "value is too big for signed 16-bit integer" }),
+        }
+    }
+}
+
+impl<OFF: std::fmt::Display, const N: usize> std::fmt::Display for Offset<OFF, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_char('#')?;
+        self.0.fmt(f)
+    }
+}
+impl<const N: usize> std::fmt::Binary for Offset<u8, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_char('b')?;
+        self.0.fmt(f)
+    }
+}
+impl<const N: usize> std::fmt::LowerHex for Offset<u8, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_char('x')?;
+        self.0.fmt(f)
+    }
+}
+impl<const N: usize> std::fmt::UpperHex for Offset<u8, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_char('x')?;
+        self.0.fmt(f)
+    }
+}
+impl<const N: usize> std::fmt::Binary for Offset<u16, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_char('b')?;
+        self.0.fmt(f)
+    }
+}
+impl<const N: usize> std::fmt::LowerHex for Offset<u16, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_char('x')?;
+        self.0.fmt(f)
+    }
+}
+impl<const N: usize> std::fmt::UpperHex for Offset<u16, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_char('x')?;
+        self.0.fmt(f)
+    }
+}
+
+enum PCOffset<OFF, const N: usize> {
+    Offset(Offset<OFF, N>),
     Label(String)
 }
-impl<T: std::fmt::Display> std::fmt::Display for PCOffset<T> {
+impl<OFF, const N: usize> std::fmt::Display for PCOffset<OFF, N> 
+    where Offset<OFF, N>: std::fmt::Display
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PCOffset::Offset(off) => write!(f, "#{off}"),
+            PCOffset::Offset(off)  => off.fmt(f),
             PCOffset::Label(label) => label.fmt(f),
         }
     }
@@ -55,141 +144,73 @@ impl<T: std::fmt::Display> std::fmt::Display for PCOffset<T> {
 impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Instruction::Add(dr, sr1, sr2) => write!(f, "ADD R{dr}, R{sr1}, {sr2}"),
-            Instruction::And(dr, sr1, sr2) => write!(f, "AND R{dr}, R{sr1}, {sr2}"),
-            Instruction::Not(dr, sr)    => write!(f, "NOT {dr}, {sr}"),
-            Instruction::Br(cc, off)     => {
+            Instruction::Add(dr, sr1, sr2) => write!(f, "ADD {dr}, {sr1}, {sr2}"),
+            Instruction::And(dr, sr1, sr2) => write!(f, "AND {dr}, {sr1}, {sr2}"),
+            Instruction::Not(dr, sr) => write!(f, "NOT {dr}, {sr}"),
+            Instruction::Br(cc, off) => {
                 write!(f, "BR")?;
                 if cc & 0b100 != 0 { write!(f, "n")?; };
                 if cc & 0b010 != 0 { write!(f, "z")?; };
                 if cc & 0b001 != 0 { write!(f, "p")?; };
                 write!(f, ", {off}")
             },
-            Instruction::Jmp(br)      => write!(f, "JMP R{br}"),
-            Instruction::Jsr(off)     => write!(f, "JSR {off}"),
-            Instruction::Jsrr(br)     => write!(f, "JSRR R{br}"),
-            Instruction::Ld(dr, off)     => write!(f, "LD R{dr}, {off}"),
-            Instruction::Ldi(dr, off)    => write!(f, "LDI R{dr}, {off}"),
-            Instruction::Ldr(dr, br, off) => write!(f, "LDR R{dr}, R{br}, #{off}"),
-            Instruction::St(sr, off)     => write!(f, "ST R{sr}, {off}"),
-            Instruction::Sti(sr, off)    => write!(f, "STI R{sr}, {off}"),
-            Instruction::Str(sr, br, off) => write!(f, "STR R{sr}, R{br}, #{off}"),
-            Instruction::Trap(vect)   => write!(f, "TRAP x{vect:02X}"),
+            Instruction::Jmp(br) => write!(f, "JMP {br}"),
+            Instruction::Jsr(off) => write!(f, "JSR {off}"),
+            Instruction::Jsrr(br) => write!(f, "JSRR {br}"),
+            Instruction::Ld(dr, off) => write!(f, "LD {dr}, {off}"),
+            Instruction::Ldi(dr, off) => write!(f, "LDI {dr}, {off}"),
+            Instruction::Ldr(dr, br, off) => write!(f, "LDR {dr}, {br}, {off}"),
+            Instruction::St(sr, off) => write!(f, "ST {sr}, {off}"),
+            Instruction::Sti(sr, off) => write!(f, "STI {sr}, {off}"),
+            Instruction::Str(sr, br, off) => write!(f, "STR {sr}, {br}, {off}"),
+            Instruction::Trap(vect) => write!(f, "TRAP {vect:02X}"),
         }
     }
 }
 
-enum ParseErr {
-    ExpectedReg,
-    ExpectedNumeric,
-    ExpectedPCOffset,
-    ExpectedComma,
-    ExpectedColon,
-    ExpectedImmOrReg
+struct ParseErr {
+    msg: &'static str
 }
 
 trait Parse: Sized {
-    fn parse(stream: &mut Parser<'_>) -> Result<Self, ParseErr>;
+    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr>;
 }
 
 struct Parser<'s> {
     tokens: &'s [(Token, Span)]
 }
 impl Parser<'_> {
+    fn peek(&self) -> Option<&(Token, Span)> {
+        self.tokens.first()
+    }
+
     fn parse<P: Parse>(&mut self) -> Result<P, ParseErr> {
         P::parse(self)
     }
-
-    fn expect_reg(&mut self) -> Result<Reg, ParseErr> {
-        self.match_reg()
-            .ok_or(ParseErr::ExpectedReg)
-    }
-    fn expect_numeric(&mut self) -> Result<u16, ParseErr> {
-        self.match_numeric()
-            .ok_or(ParseErr::ExpectedNumeric)
-    }
-    fn expect_pc_offset(&mut self) -> Result<PCOffset<i16>, ParseErr> {
-        self.match_pc_offset()
-            .ok_or(ParseErr::ExpectedPCOffset)
-    }
-    fn expect_colon(&mut self) -> Result<(), ParseErr> {
-        match self.match_colon() {
-            true  => Ok(()),
-            false => Err(ParseErr::ExpectedColon),
+    fn match_<T>(&mut self, pred: impl FnOnce(&Token) -> Result<T, ParseErr>) -> Result<T, ParseErr> {
+        let Some((tok, _)) = self.peek() else { return Err(ParseErr { msg: "unexpected eol" }) };
+        
+        let result = pred(tok);
+        if result.is_ok() {
+            self.next();
         }
-    }
-    fn expect_comma(&mut self) -> Result<(), ParseErr> {
-        match self.match_comma() {
-            true  => Ok(()),
-            false => Err(ParseErr::ExpectedComma),
-        }
-    }
-
-    fn match_reg(&mut self) -> Option<Reg> {
-        if let Some((&(Token::Reg(reg), _), rest)) = self.tokens.split_first() {
-            self.tokens = rest;
-            return Some(reg);
-        }
-
-        None
-    }
-    fn match_numeric(&mut self) -> Option<u16> {
-        if let Some((&(Token::Numeric(num), _), rest)) = self.tokens.split_first() {
-            self.tokens = rest;
-            return Some(num);
-        }
-
-        None
-    }
-    fn match_pc_offset(&mut self) -> Option<PCOffset<i16>> {
-        if let Some(((first_tok, _), rest)) = self.tokens.split_first() {
-            match first_tok {
-                &Token::Numeric(num) => {
-                    self.tokens = rest;
-                    return Some(PCOffset::Offset(num as i16))
-                },
-                Token::Ident(id) => {
-                    self.tokens = rest;
-                    return Some(PCOffset::Label(id.to_string()))
-                },
-                _ => {}
-            }
-        }
-
-        None
-    }
-    fn match_colon(&mut self) -> bool {
-        if let Some(((Token::Colon, _), rest)) = self.tokens.split_first() {
-            self.tokens = rest;
-            return true;
-        }
-
-        false
-    }
-    fn match_comma(&mut self) -> bool {
-        if let Some(((Token::Comma, _), rest)) = self.tokens.split_first() {
-            self.tokens = rest;
-            return true;
-        }
-
-        false
+        result
     }
 }
-impl Parse for ImmOrReg {
-    fn parse(stream: &mut Parser<'_>) -> Result<Self, ParseErr> {
-        if let Some(num) = stream.match_numeric() {
-            return Ok(ImmOrReg::Imm(num as i8));
-        }
+impl<'s> Iterator for Parser<'s> {
+    type Item = &'s (Token, Span);
 
-        if let Some(reg) = stream.match_reg() {
-            return Ok(ImmOrReg::Reg(reg));
-        }
-
-        Err(ParseErr::ExpectedImmOrReg)
+    fn next(&mut self) -> Option<Self::Item> {
+        let (first, rest) = self.tokens.split_first()?;
+        self.tokens = rest;
+        Some(first)
     }
 }
-impl Parse for PCOffset<i16> {
-    fn parse(stream: &mut Parser<'_>) -> Result<Self, ParseErr> {
-        stream.expect_pc_offset()
+impl Parse for Reg {
+    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+        parser.match_(|t| match t {
+            &Token::Reg(reg) => Ok(Reg(reg)),
+            _ => Err(ParseErr { msg: "expected register" }),
+        })
     }
 }
