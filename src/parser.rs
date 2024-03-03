@@ -77,23 +77,6 @@ impl std::fmt::Display for ImmOrReg {
 
 struct Offset<OFF, const N: usize>(OFF);
 
-impl<const N: usize> Offset<u16, N> {
-    fn new(n: u16) -> Result<Self, ParseErr> {
-        match n == (n << (16 - N)) >> (16 - N) {
-            true  => Ok(Offset(n)),
-            false => Err(ParseErr::new(format!("value is too big for unsigned {N}-bit integer"))),
-        }
-    }
-}
-impl<const N: usize> Offset<i16, N> {
-    fn new(n: i16) -> Result<Self, ParseErr> {
-        match n == (n << (16 - N)) >> (16 - N) {
-            true  => Ok(Offset(n)),
-            false => Err(ParseErr::new(format!("value is too big for signed {N}-bit integer"))),
-        }
-    }
-}
-
 impl<OFF: std::fmt::Display, const N: usize> std::fmt::Display for Offset<OFF, N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_char('#')?;
@@ -133,6 +116,42 @@ impl<OFF, const N: usize> std::fmt::Display for PCOffset<OFF, N>
         }
     }
 }
+
+macro_rules! impl_offset {
+    ($Int:ty, $sign:literal) => {
+        impl<const N: usize> Offset<$Int, N> {
+            fn new(n: $Int) -> Result<Self, ParseErr> {
+                match n == (n << (16 - N)) >> (16 - N) {
+                    true  => Ok(Offset(n)),
+                    false => Err(ParseErr::new(format!(concat!("value is too big for ", $sign, " {}-bit integer"), N))),
+                }
+            }
+        }
+
+        impl<const N: usize> Parse for Offset<$Int, N> {
+            fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+                parser.match_(|t| match t {
+                    &Token::Numeric(n) => Self::new(n as $Int),
+                    _ => Err(ParseErr::new("expected immediate value")),
+                })
+            }
+        }
+
+        impl<const N: usize> Parse for PCOffset<$Int, N> {
+            fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+                match parser.parse() {
+                    Ok(off) => Ok(PCOffset::Offset(off)),
+                    Err(_) => parser.match_(|t| match t {
+                        Token::Ident(s) => Ok(PCOffset::Label(s.to_string())),
+                        _ => Err(ParseErr::new("expected offset or label"))
+                    }),
+                }
+            }
+        }
+    }
+}
+impl_offset!(u16, "unsigned");
+impl_offset!(i16, "signed");
 
 struct ParseErr {
     msg: Cow<'static, str>
@@ -182,44 +201,6 @@ impl Parse for Reg {
             &Token::Reg(reg) => Ok(Reg(reg)),
             _ => Err(ParseErr::new("expected register")),
         })
-    }
-}
-impl<const N: usize> Parse for Offset<u16, N> {
-    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
-        parser.match_(|t| match t {
-            &Token::Numeric(n) => Self::new(n),
-            _ => Err(ParseErr::new("expected register")),
-        })
-    }
-}
-impl<const N: usize> Parse for Offset<i16, N> {
-    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
-        parser.match_(|t| match t {
-            &Token::Numeric(n) => Self::new(n as _),
-            _ => Err(ParseErr::new("expected register")),
-        })
-    }
-}
-impl<const N: usize> Parse for PCOffset<u16, N> {
-    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
-        match parser.parse() {
-            Ok(off) => Ok(PCOffset::Offset(off)),
-            Err(_) => parser.match_(|t| match t {
-                Token::Ident(s) => Ok(PCOffset::Label(s.to_string())),
-                _ => Err(ParseErr::new("expected offset or label"))
-            }),
-        }
-    }
-}
-impl<const N: usize> Parse for PCOffset<i16, N> {
-    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
-        match parser.parse() {
-            Ok(off) => Ok(PCOffset::Offset(off)),
-            Err(_) => parser.match_(|t| match t {
-                Token::Ident(s) => Ok(PCOffset::Label(s.to_string())),
-                _ => Err(ParseErr::new("expected offset or label"))
-            }),
-        }
     }
 }
 impl Parse for ImmOrReg {
