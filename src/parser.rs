@@ -233,6 +233,13 @@ impl Parse for ImmOrReg {
         }
     }
 }
+fn parse_comma(t: &Token) -> Result<(), ParseErr> {
+    match t {
+        Token::Comma => Ok(()),
+        _ => Err(ParseErr::new("expected comma"))
+    }
+}
+
 impl Parse for Instruction {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
         let opcode = parser.match_(|t| match t {
@@ -248,25 +255,25 @@ impl Parse for Instruction {
         match &*opcode.to_uppercase() {
             "ADD" => {
                 let dr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
+                parser.match_(parse_comma)?;
                 let sr1 = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
+                parser.match_(parse_comma)?;
                 let sr2 = parser.parse()?;
 
                 Ok(Self::Add(dr, sr1, sr2))
             },
             "AND" => {
                 let dr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
+                parser.match_(parse_comma)?;
                 let sr1 = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
+                parser.match_(parse_comma)?;
                 let sr2 = parser.parse()?;
 
                 Ok(Self::And(dr, sr1, sr2))
             },
             "NOT" => {
                 let dr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
+                parser.match_(parse_comma)?;
                 let sr = parser.parse()?;
 
                 Ok(Self::Not(dr, sr))
@@ -284,46 +291,46 @@ impl Parse for Instruction {
             "JSRR" => Ok(Self::Jsrr(parser.parse()?)),
             "LD" => {
                 let dr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
+                parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
                 Ok(Self::Ld(dr, off))
             },
             "LDI" => {
                 let dr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
+                parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
                 Ok(Self::Ldi(dr, off))
             },
             "LDR" => {
                 let dr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
+                parser.match_(parse_comma)?;
                 let br = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
+                parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
                 Ok(Self::Ldr(dr, br, off))
             },
             "ST" => {
                 let sr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
+                parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
                 Ok(Self::St(sr, off))
             },
             "STI" => {
                 let sr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
+                parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
                 Ok(Self::Sti(sr, off))
             },
             "STR" => {
                 let dr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
+                parser.match_(parse_comma)?;
                 let br = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
+                parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
                 Ok(Self::Str(dr, br, off))
