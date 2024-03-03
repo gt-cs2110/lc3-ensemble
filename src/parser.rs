@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt::Write;
 
 use logos::Span;
@@ -80,7 +81,7 @@ impl<const N: usize> Offset<u16, N> {
     fn new(n: u16) -> Result<Self, ParseErr> {
         match n == (n << (16 - N)) >> (16 - N) {
             true  => Ok(Offset(n)),
-            false => Err(ParseErr { msg: "value is too big for unsigned 16-bit integer" }),
+            false => Err(ParseErr::new(format!("value is too big for unsigned {N}-bit integer"))),
         }
     }
 }
@@ -88,7 +89,7 @@ impl<const N: usize> Offset<i16, N> {
     fn new(n: i16) -> Result<Self, ParseErr> {
         match n == (n << (16 - N)) >> (16 - N) {
             true  => Ok(Offset(n)),
-            false => Err(ParseErr { msg: "value is too big for signed 16-bit integer" }),
+            false => Err(ParseErr::new(format!("value is too big for signed {N}-bit integer"))),
         }
     }
 }
@@ -134,9 +135,13 @@ impl<OFF, const N: usize> std::fmt::Display for PCOffset<OFF, N>
 }
 
 struct ParseErr {
-    msg: &'static str
+    msg: Cow<'static, str>
 }
-
+impl ParseErr {
+    fn new<C: Into<Cow<'static, str>>>(msg: C) -> Self {
+        Self { msg: msg.into() }
+    }
+}
 trait Parse: Sized {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr>;
 }
@@ -153,7 +158,7 @@ impl Parser<'_> {
         P::parse(self)
     }
     fn match_<T>(&mut self, pred: impl FnOnce(&Token) -> Result<T, ParseErr>) -> Result<T, ParseErr> {
-        let Some((tok, _)) = self.peek() else { return Err(ParseErr { msg: "unexpected eol" }) };
+        let Some((tok, _)) = self.peek() else { return Err(ParseErr::new("unexpected eol")) };
         
         let result = pred(tok);
         if result.is_ok() {
@@ -175,7 +180,7 @@ impl Parse for Reg {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
         parser.match_(|t| match t {
             &Token::Reg(reg) => Ok(Reg(reg)),
-            _ => Err(ParseErr { msg: "expected register" }),
+            _ => Err(ParseErr::new("expected register")),
         })
     }
 }
@@ -183,7 +188,7 @@ impl<const N: usize> Parse for Offset<u16, N> {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
         parser.match_(|t| match t {
             &Token::Numeric(n) => Self::new(n),
-            _ => Err(ParseErr { msg: "expected register" }),
+            _ => Err(ParseErr::new("expected register")),
         })
     }
 }
@@ -191,7 +196,7 @@ impl<const N: usize> Parse for Offset<i16, N> {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
         parser.match_(|t| match t {
             &Token::Numeric(n) => Self::new(n as _),
-            _ => Err(ParseErr { msg: "expected register" }),
+            _ => Err(ParseErr::new("expected register")),
         })
     }
 }
@@ -201,7 +206,7 @@ impl<const N: usize> Parse for PCOffset<u16, N> {
             Ok(off) => Ok(PCOffset::Offset(off)),
             Err(_) => parser.match_(|t| match t {
                 Token::Ident(s) => Ok(PCOffset::Label(s.to_string())),
-                _ => Err(ParseErr { msg: "expected offset or label" })
+                _ => Err(ParseErr::new("expected offset or label"))
             }),
         }
     }
@@ -212,7 +217,7 @@ impl<const N: usize> Parse for PCOffset<i16, N> {
             Ok(off) => Ok(PCOffset::Offset(off)),
             Err(_) => parser.match_(|t| match t {
                 Token::Ident(s) => Ok(PCOffset::Label(s.to_string())),
-                _ => Err(ParseErr { msg: "expected offset or label" })
+                _ => Err(ParseErr::new("expected offset or label"))
             }),
         }
     }
@@ -223,7 +228,7 @@ impl Parse for ImmOrReg {
             Ok(imm) => Ok(ImmOrReg::Imm(imm)),
             Err(_) => match parser.parse() {
                 Ok(reg) => Ok(ImmOrReg::Reg(reg)),
-                Err(_) => Err(ParseErr { msg: "expected immediate value or register" }),
+                Err(_) => Err(ParseErr::new("expected immediate value or register")),
             }
         }
     }
@@ -231,37 +236,37 @@ impl Parse for ImmOrReg {
 impl Parse for Instruction {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
         let opcode = parser.match_(|t| match t {
-            Token::Numeric(_) => Err(ParseErr { msg: "unexpected numeric" }),
-            Token::Reg(_) => Err(ParseErr { msg: "unexpected register" }),
+            Token::Numeric(_) => Err(ParseErr::new("unexpected numeric")),
+            Token::Reg(_) => Err(ParseErr::new("unexpected register")),
             Token::Ident(id) => Ok(id.to_string()),
-            Token::Directive(_) => Err(ParseErr { msg: "unexpected directive" }),
-            Token::Colon => Err(ParseErr { msg: "unexpected colon" }),
-            Token::Comma => Err(ParseErr { msg: "unexpected comma" }),
-            Token::Comment => Err(ParseErr { msg: "unexpected comment" }), // FIXME
+            Token::Directive(_) => Err(ParseErr::new("unexpected directive")),
+            Token::Colon => Err(ParseErr::new("unexpected colon")),
+            Token::Comma => Err(ParseErr::new("unexpected comma")),
+            Token::Comment => Err(ParseErr::new("unexpected comment")), // FIXME
         })?;
 
         match &*opcode.to_uppercase() {
             "ADD" => {
                 let dr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr { msg: "expected comma" }) })?;
+                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
                 let sr1 = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr { msg: "expected comma" }) })?;
+                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
                 let sr2 = parser.parse()?;
 
                 Ok(Self::Add(dr, sr1, sr2))
             },
             "AND" => {
                 let dr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr { msg: "expected comma" }) })?;
+                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
                 let sr1 = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr { msg: "expected comma" }) })?;
+                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
                 let sr2 = parser.parse()?;
 
                 Ok(Self::And(dr, sr1, sr2))
             },
             "NOT" => {
                 let dr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr { msg: "expected comma" }) })?;
+                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
                 let sr = parser.parse()?;
 
                 Ok(Self::Not(dr, sr))
@@ -279,52 +284,52 @@ impl Parse for Instruction {
             "JSRR" => Ok(Self::Jsrr(parser.parse()?)),
             "LD" => {
                 let dr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr { msg: "expected comma" }) })?;
+                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
                 let off = parser.parse()?;
 
                 Ok(Self::Ld(dr, off))
             },
             "LDI" => {
                 let dr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr { msg: "expected comma" }) })?;
+                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
                 let off = parser.parse()?;
 
                 Ok(Self::Ldi(dr, off))
             },
             "LDR" => {
                 let dr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr { msg: "expected comma" }) })?;
+                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
                 let br = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr { msg: "expected comma" }) })?;
+                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
                 let off = parser.parse()?;
 
                 Ok(Self::Ldr(dr, br, off))
             },
             "ST" => {
                 let sr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr { msg: "expected comma" }) })?;
+                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
                 let off = parser.parse()?;
 
                 Ok(Self::St(sr, off))
             },
             "STI" => {
                 let sr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr { msg: "expected comma" }) })?;
+                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
                 let off = parser.parse()?;
 
                 Ok(Self::Sti(sr, off))
             },
             "STR" => {
                 let dr = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr { msg: "expected comma" }) })?;
+                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
                 let br = parser.parse()?;
-                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr { msg: "expected comma" }) })?;
+                parser.match_(|t| if let Token::Comma = t { Ok(()) } else { Err(ParseErr::new("expected comma")) })?;
                 let off = parser.parse()?;
 
                 Ok(Self::Str(dr, br, off))
             },
             "TRAP" => Ok(Self::Trap(parser.parse()?)),
-            _ => Err(ParseErr { msg: "invalid instruction" })
+            _ => Err(ParseErr::new("invalid instruction"))
         }
     }
 }
