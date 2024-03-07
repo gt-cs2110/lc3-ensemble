@@ -19,8 +19,21 @@ enum Instruction {
     St(Reg, PCOffset9),
     Sti(Reg, PCOffset9),
     Str(Reg, Reg, Offset6),
-    Trap(TrapVect8)
+    Trap(TrapVect8),
+
+    // Extra instructions
+    Nop,
+    Ret,
+    Rti,
+    Getc,
+    Out,
+    Putc,
+    Puts,
+    In,
+    Putsp,
+    Halt
 }
+
 impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -44,6 +57,16 @@ impl std::fmt::Display for Instruction {
             Instruction::Sti(sr, off) => write!(f, "STI {sr}, {off}"),
             Instruction::Str(sr, br, off) => write!(f, "STR {sr}, {br}, {off}"),
             Instruction::Trap(vect) => write!(f, "TRAP {vect:02X}"),
+            Instruction::Nop   => f.write_str("NOP"),
+            Instruction::Ret   => f.write_str("RET"),
+            Instruction::Rti   => f.write_str("RTI"),
+            Instruction::Getc  => f.write_str("GETC"),
+            Instruction::Out   => f.write_str("OUT"),
+            Instruction::Putc  => f.write_str("PUTC"),
+            Instruction::Puts  => f.write_str("PUTS"),
+            Instruction::In    => f.write_str("IN"),
+            Instruction::Putsp => f.write_str("PUTSP"),
+            Instruction::Halt  => f.write_str("HALT"),
         }
     }
 }
@@ -317,6 +340,16 @@ impl Parse for Instruction {
                 Ok(Self::Str(dr, br, off))
             },
             "TRAP" => Ok(Self::Trap(parser.parse()?)),
+            "NOP" => Ok(Self::Nop),
+            "RET" => Ok(Self::Ret),
+            "RTI" => Ok(Self::Rti),
+            "GETC" => Ok(Self::Getc),
+            "OUT" => Ok(Self::Out),
+            "PUTC" => Ok(Self::Putc),
+            "PUTS" => Ok(Self::Puts),
+            "IN" => Ok(Self::In),
+            "PUTSP" => Ok(Self::Putsp),
+            "HALT" => Ok(Self::Halt),
             _ => Err(ParseErr::new("invalid instruction"))
         }
     }
