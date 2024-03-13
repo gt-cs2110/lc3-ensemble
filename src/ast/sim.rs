@@ -88,22 +88,68 @@ impl SimInstr {
     pub fn decode(word: u16) -> Self {
         let (opcode, operands) = (word >> 4, (word << 4) >> 4);
         match opcode {
-            OP_BR   => todo!(),
-            OP_ADD  => todo!(),
-            OP_LD   => todo!(),
-            OP_ST   => todo!(),
-            OP_JSR  => todo!(),
-            OP_AND  => todo!(),
-            OP_LDR  => todo!(),
-            OP_STR  => todo!(),
-            OP_RTI  => todo!(),
-            OP_NOT  => todo!(),
-            OP_LDI  => todo!(),
-            OP_STI  => todo!(),
-            OP_JMP  => todo!(),
-            OP_LEA  => todo!(),
-            OP_TRAP => todo!(),
+            OP_BR => {
+                let cc = get_bits(operands, 9..12) as u8;
+                let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
+                Self::Br(cc, off)
+            },
+            OP_ADD => todo!("OP_ADD"),
+            OP_LD => {
+                let dr = Reg(get_bits(operands, 9..12) as u8);
+                let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
+
+                Self::Ld(dr, off)
+            }
+            OP_ST => {
+                let sr = Reg(get_bits(operands, 9..12) as u8);
+                let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
+
+                Self::St(sr, off)
+            },
+            OP_JSR => todo!("OP_JSR"),
+            OP_AND => todo!("OP_AND"),
+            OP_LDR => {
+                let dr = Reg(get_bits(operands, 9..12) as u8);
+                let br = Reg(get_bits(operands, 6..9) as u8);
+                let off = IOffset::new_trunc(get_bits(operands, 0..6) as i16);
+
+                Self::Ldr(dr, br, off)
+            },
+            OP_STR => {
+                let sr = Reg(get_bits(operands, 9..12) as u8);
+                let br = Reg(get_bits(operands, 6..9) as u8);
+                let off = IOffset::new_trunc(get_bits(operands, 0..6) as i16);
+
+                Self::Str(sr, br, off)
+            },
+            OP_RTI => todo!("OP_RTI"),
+            OP_NOT => todo!("OP_NOT"),
+            OP_LDI => {
+                let dr = Reg(get_bits(operands, 9..12) as u8);
+                let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
+
+                Self::Ldi(dr, off)
+            },
+            OP_STI => {
+                let sr = Reg(get_bits(operands, 9..12) as u8);
+                let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
+
+                Self::Sti(sr, off)
+            },
+            OP_JMP => todo!("OP_JMP"),
+            OP_LEA => {
+                let dr = Reg(get_bits(operands, 9..12) as u8);
+                let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
+
+                Self::Lea(dr, off)
+            },
+            OP_TRAP => todo!("OP_TRAP"),
             _ => panic!("invalid opcode") // FIXME
         }
     }
+}
+
+fn get_bits(n: u16, r: std::ops::Range<usize>) -> u16 {
+    let len = r.end - r.start;
+    (n >> r.start) & ((1 << len) - 1)
 }

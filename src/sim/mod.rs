@@ -36,13 +36,13 @@ impl Simulator {
         match instr {
             SimInstr::Br(cc, off)  => {
                 if cc & self.cc != 0 {
-                    self.pc = self.pc.wrapping_add_signed(off.0);
+                    self.pc = self.pc.wrapping_add_signed(off.get());
                 }
             },
             SimInstr::Add(dr, sr1, sr2) => {
                 let val1 = self.reg_file[sr1.0 as usize].data;
                 let val2 = match sr2 {
-                    crate::ast::ImmOrReg::Imm(i2) => i2.0,
+                    crate::ast::ImmOrReg::Imm(i2) => i2.get(),
                     crate::ast::ImmOrReg::Reg(r2) => self.reg_file[r2.0 as usize].data as i16,
                 };
 
@@ -51,21 +51,21 @@ impl Simulator {
                 self.set_cc(result);
             },
             SimInstr::Ld(dr, off) => {
-                let ea = self.pc.wrapping_add_signed(off.0);
+                let ea = self.pc.wrapping_add_signed(off.get());
 
                 let val = self.mem[ea as usize].data;
                 self.reg_file[dr.0 as usize].set(val);
                 self.set_cc(val);
             },
             SimInstr::St(sr, off) => {
-                let ea = self.pc.wrapping_add_signed(off.0);
+                let ea = self.pc.wrapping_add_signed(off.get());
 
                 let val = self.reg_file[sr.0 as usize].data;
                 self.mem[ea as usize].set(val);
             },
             SimInstr::Jsr(op) => {
                 let off = match op {
-                    crate::ast::ImmOrReg::Imm(off) => off.0,
+                    crate::ast::ImmOrReg::Imm(off) => off.get(),
                     crate::ast::ImmOrReg::Reg(br)  => self.reg_file[br.0 as usize].data as i16,
                 };
 
@@ -75,7 +75,7 @@ impl Simulator {
             SimInstr::And(dr, sr1, sr2) => {
                 let val1 = self.reg_file[sr1.0 as usize].data;
                 let val2 = match sr2 {
-                    crate::ast::ImmOrReg::Imm(i2) => i2.0 as u16,
+                    crate::ast::ImmOrReg::Imm(i2) => i2.get() as u16,
                     crate::ast::ImmOrReg::Reg(r2) => self.reg_file[r2.0 as usize].data,
                 };
 
@@ -84,14 +84,14 @@ impl Simulator {
                 self.set_cc(result);
             },
             SimInstr::Ldr(dr, br, off) => {
-                let ea = self.reg_file[br.0 as usize].data.wrapping_add_signed(off.0);
+                let ea = self.reg_file[br.0 as usize].data.wrapping_add_signed(off.get());
 
                 let val = self.mem[ea as usize].data;
                 self.reg_file[dr.0 as usize].set(val);
                 self.set_cc(val);
             },
             SimInstr::Str(sr, br, off) => {
-                let ea = self.reg_file[br.0 as usize].data.wrapping_add_signed(off.0);
+                let ea = self.reg_file[br.0 as usize].data.wrapping_add_signed(off.get());
                 
                 let val = self.reg_file[sr.0 as usize].data;
                 self.mem[ea as usize].set(val);
@@ -105,14 +105,14 @@ impl Simulator {
                 self.set_cc(result);
             },
             SimInstr::Ldi(dr, off) => {
-                let ea = self.mem[self.pc.wrapping_add_signed(off.0) as usize].data;
+                let ea = self.mem[self.pc.wrapping_add_signed(off.get()) as usize].data;
 
                 let val = self.mem[ea as usize].data;
                 self.reg_file[dr.0 as usize].set(val);
                 self.set_cc(val);
             },
             SimInstr::Sti(sr, off) => {
-                let ea = self.mem[self.pc.wrapping_add_signed(off.0) as usize].data;
+                let ea = self.mem[self.pc.wrapping_add_signed(off.get()) as usize].data;
 
                 let val = self.reg_file[sr.0 as usize].data;
                 self.mem[ea as usize].set(val);
@@ -122,7 +122,7 @@ impl Simulator {
                 self.pc = self.pc.wrapping_add_signed(off);
             },
             SimInstr::Lea(dr, off) => {
-                let ea = self.pc.wrapping_add_signed(off.0);
+                let ea = self.pc.wrapping_add_signed(off.get());
                 self.reg_file[dr.0 as usize].set(ea);
             },
             SimInstr::Trap(vect) => panic!("bad trap {vect:02X}"),
