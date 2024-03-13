@@ -65,8 +65,8 @@ impl Simulator {
             },
             SimInstr::Jsr(op) => {
                 let off = match op {
-                    crate::ast::OffOrReg::Off(off) => off.0,
-                    crate::ast::OffOrReg::Reg(br)  => self.reg_file[br.0 as usize].data as i16,
+                    crate::ast::ImmOrReg::Imm(off) => off.0,
+                    crate::ast::ImmOrReg::Reg(br)  => self.reg_file[br.0 as usize].data as i16,
                 };
 
                 self.reg_file[0b111].set(self.pc);

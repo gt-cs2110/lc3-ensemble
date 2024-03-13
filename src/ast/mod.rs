@@ -14,22 +14,17 @@ type CondCode = u8;
 type IOffset<const N: usize> = Offset<i16, N>;
 type TrapVect8 = Offset<u16, 8>;
 
-pub(crate) enum ImmOrReg {
-    Imm(Imm5),
+pub(crate) enum ImmOrReg<const N: usize> {
+    Imm(IOffset<N>),
     Reg(Reg)
 }
-impl std::fmt::Display for ImmOrReg {
+impl<const N: usize> std::fmt::Display for ImmOrReg<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ImmOrReg::Imm(imm) => imm.fmt(f),
             ImmOrReg::Reg(reg) => reg.fmt(f),
         }
     }
-}
-
-pub(crate) enum OffOrReg {
-    Off(IOffset<11>),
-    Reg(Reg)
 }
 
 pub(crate) struct Offset<OFF, const N: usize>(pub OFF);

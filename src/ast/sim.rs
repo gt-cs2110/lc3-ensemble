@@ -1,4 +1,4 @@
-use super::{CondCode, IOffset, ImmOrReg, OffOrReg, Reg, TrapVect8};
+use super::{CondCode, IOffset, ImmOrReg, Reg, TrapVect8};
 
 const OP_BR: u16   = 0b0000; 
 const OP_ADD: u16  = 0b0001; 
@@ -18,11 +18,11 @@ const OP_TRAP: u16 = 0b1111;
 
 pub enum SimInstr {
     Br(CondCode, IOffset<9>),
-    Add(Reg, Reg, ImmOrReg),
+    Add(Reg, Reg, ImmOrReg<5>),
     Ld(Reg, IOffset<9>),
     St(Reg, IOffset<9>),
-    Jsr(OffOrReg),
-    And(Reg, Reg, ImmOrReg),
+    Jsr(ImmOrReg<11>),
+    And(Reg, Reg, ImmOrReg<5>),
     Ldr(Reg, Reg, IOffset<6>),
     Str(Reg, Reg, IOffset<6>),
     Rti,
@@ -66,8 +66,8 @@ impl SimInstr {
             SimInstr::Ld(dr, off)       => (self.opcode() << 12) | ((dr.0 as u16) << 9) | off.repr(),
             SimInstr::St(sr, off)       => (self.opcode() << 12) | ((sr.0 as u16) << 9) | off.repr(),
             SimInstr::Jsr(arg)          => match arg {
-                OffOrReg::Off(o) => (self.opcode() << 12) | (1 << 11) | o.repr(),
-                OffOrReg::Reg(r) => (self.opcode() << 12) | (r.0 as u16) << 6,
+                ImmOrReg::Imm(o) => (self.opcode() << 12) | (1 << 11) | o.repr(),
+                ImmOrReg::Reg(r) => (self.opcode() << 12) | (r.0 as u16) << 6,
             }
             SimInstr::And(dr, sr1, sr2) => match sr2 {
                 ImmOrReg::Imm(i2) => (self.opcode() << 12) | ((dr.0 as u16) << 9) | ((sr1.0 as u16) << 6) | (1 << 5) | i2.repr(),
