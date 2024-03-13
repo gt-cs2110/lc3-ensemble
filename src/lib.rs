@@ -3,3 +3,4 @@
 pub mod lexer;
 pub mod parser;
 mod sim;
+pub mod ast;
