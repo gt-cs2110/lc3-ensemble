@@ -1,13 +1,16 @@
 use std::borrow::Cow;
-use std::fmt::Write;
 
 use logos::Span;
 
+use crate::ast::{CondCode, IOffset, ImmOrReg, Offset, PCOffset, Reg, TrapVect8};
 use crate::lexer::Token;
 
+type PCOffset9 = PCOffset<i16, 9>;
+type PCOffset11 = PCOffset<i16, 11>;
+
 enum Instruction {
-    Add(Reg, Reg, ImmOrReg),
-    And(Reg, Reg, ImmOrReg),
+    Add(Reg, Reg, ImmOrReg<5>),
+    And(Reg, Reg, ImmOrReg<5>),
     Not(Reg, Reg),
     Br(CondCode, PCOffset9),
     Jmp(Reg),
@@ -15,11 +18,11 @@ enum Instruction {
     Jsrr(Reg),
     Ld(Reg, PCOffset9),
     Ldi(Reg, PCOffset9),
-    Ldr(Reg, Reg, Offset6),
+    Ldr(Reg, Reg, IOffset<6>),
     Lea(Reg, PCOffset9),
     St(Reg, PCOffset9),
     Sti(Reg, PCOffset9),
-    Str(Reg, Reg, Offset6),
+    Str(Reg, Reg, IOffset<6>),
     Trap(TrapVect8),
 
     // Extra instructions
@@ -73,111 +76,6 @@ impl std::fmt::Display for Instruction {
     }
 }
 
-struct Reg(u8);
-impl std::fmt::Display for Reg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "R{}", self.0)
-    }
-}
-
-type Imm5 = Offset<i16, 5>;
-type CondCode = u8;
-type Offset6 = Offset<i16, 6>;
-type PCOffset9 = PCOffset<i16, 9>;
-type PCOffset11 = PCOffset<i16, 11>;
-type TrapVect8 = Offset<u16, 8>;
-
-enum ImmOrReg {
-    Imm(Imm5),
-    Reg(Reg)
-}
-impl std::fmt::Display for ImmOrReg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ImmOrReg::Imm(imm) => imm.fmt(f),
-            ImmOrReg::Reg(reg) => reg.fmt(f),
-        }
-    }
-}
-
-struct Offset<OFF, const N: usize>(OFF);
-
-impl<OFF: std::fmt::Display, const N: usize> std::fmt::Display for Offset<OFF, N> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_char('#')?;
-        self.0.fmt(f)
-    }
-}
-impl<const N: usize> std::fmt::Binary for Offset<u16, N> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_char('b')?;
-        self.0.fmt(f)
-    }
-}
-impl<const N: usize> std::fmt::LowerHex for Offset<u16, N> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_char('x')?;
-        self.0.fmt(f)
-    }
-}
-impl<const N: usize> std::fmt::UpperHex for Offset<u16, N> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_char('x')?;
-        self.0.fmt(f)
-    }
-}
-
-enum PCOffset<OFF, const N: usize> {
-    Offset(Offset<OFF, N>),
-    Label(String)
-}
-impl<OFF, const N: usize> std::fmt::Display for PCOffset<OFF, N> 
-    where Offset<OFF, N>: std::fmt::Display
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PCOffset::Offset(off)  => off.fmt(f),
-            PCOffset::Label(label) => label.fmt(f),
-        }
-    }
-}
-
-macro_rules! impl_offset {
-    ($Int:ty, $sign:literal) => {
-        impl<const N: usize> Offset<$Int, N> {
-            fn new(n: $Int) -> Result<Self, ParseErr> {
-                match n == (n << (16 - N)) >> (16 - N) {
-                    true  => Ok(Offset(n)),
-                    false => Err(ParseErr::new(format!(concat!("value is too big for ", $sign, " {}-bit integer"), N))),
-                }
-            }
-        }
-
-        impl<const N: usize> Parse for Offset<$Int, N> {
-            fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
-                parser.match_(|t| match t {
-                    &Token::Numeric(n) => Self::new(n as $Int),
-                    _ => Err(ParseErr::new("expected immediate value")),
-                })
-            }
-        }
-
-        impl<const N: usize> Parse for PCOffset<$Int, N> {
-            fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
-                match parser.parse() {
-                    Ok(off) => Ok(PCOffset::Offset(off)),
-                    Err(_) => parser.match_(|t| match t {
-                        Token::Ident(s) => Ok(PCOffset::Label(s.to_string())),
-                        _ => Err(ParseErr::new("expected offset or label"))
-                    }),
-                }
-            }
-        }
-    }
-}
-impl_offset!(u16, "unsigned");
-impl_offset!(i16, "signed");
-
 struct ParseErr {
     msg: Cow<'static, str>
 }
@@ -228,7 +126,7 @@ impl Parse for Reg {
         })
     }
 }
-impl Parse for ImmOrReg {
+impl<const N: usize> Parse for ImmOrReg<N> {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
         match parser.parse() {
             Ok(imm) => Ok(ImmOrReg::Imm(imm)),
@@ -239,6 +137,38 @@ impl Parse for ImmOrReg {
         }
     }
 }
+
+impl<const N: usize> Parse for Offset<i16, N> {
+    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+        parser.match_(|t| match t {
+            &Token::Numeric(n) => Self::new(n as i16).map_err(|s| ParseErr::new(s.to_string())),
+            _ => Err(ParseErr::new("expected immediate value")),
+        })
+    }
+}
+impl<const N: usize> Parse for Offset<u16, N> {
+    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+        parser.match_(|t| match t {
+            &Token::Numeric(n) => Self::new(n).map_err(|s| ParseErr::new(s.to_string())),
+            _ => Err(ParseErr::new("expected immediate value")),
+        })
+    }
+}
+
+impl<OFF, const N: usize> Parse for PCOffset<OFF, N> 
+    where Offset<OFF, N>: Parse
+{
+    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+        match parser.parse() {
+            Ok(off) => Ok(PCOffset::Offset(off)),
+            Err(_) => parser.match_(|t| match t {
+                Token::Ident(s) => Ok(PCOffset::Label(s.to_string())),
+                _ => Err(ParseErr::new("expected offset or label"))
+            }),
+        }
+    }
+}
+
 fn parse_comma(t: &Token) -> Result<(), ParseErr> {
     match t {
         Token::Comma => Ok(()),

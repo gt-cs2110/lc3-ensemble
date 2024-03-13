@@ -89,6 +89,15 @@ pub enum OffsetNewError {
     /// The provided offset cannot fit a signed integer of the given bitsize.
     CannotFitSigned(usize)
 }
+impl std::fmt::Display for OffsetNewError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OffsetNewError::CannotFitUnsigned(n) => write!(f, "value is too big for unsigned {n}-bit integer"),
+            OffsetNewError::CannotFitSigned(n) => write!(f, "value is too big for signed {n}-bit integer"),
+        }
+    }
+}
+
 macro_rules! impl_offset {
     ($Int:ty, $ErrIdent:ident) => {
         impl<const N: usize> Offset<$Int, N> {
