@@ -11,22 +11,27 @@ impl std::fmt::Display for Reg {
     }
 }
 
-/// A condition code (used for BR), must be between 0 and 7.
+/// A condition code (used for `BR`), must be between 0 and 7.
 pub type CondCode = u8;
-/// A signed offset or a signed immediate value.
+
+/// A value representing a signed offset or a signed immediate value.
+/// 
 /// `N` indicates the maximum bit size of this offset/immediate value.
 /// 
-/// For example, `IOffset<5>` is equivalent to `ADD`/`AND`'s imm5 operand.
+/// For example, `IOffset<5>` is used to represent `ADD`/`AND`'s imm5 operand.
 pub type IOffset<const N: usize> = Offset<i16, N>;
-/// A trap vector (used for TRAP).
+/// An unsigned 8-bit trap vector (used for `TRAP`).
 pub type TrapVect8 = Offset<u16, 8>;
 
-/// Either an immediate value or a register.
+/// A value representing either an immediate value or a register.
 /// 
-/// This is used in instances like `AND`/`ADD` to handle a data value being possibly an imm5 or a register.
+/// This is used to handle the second operand `AND`/`ADD`, which
+/// can be either an immediate value or a register.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum ImmOrReg<const N: usize> {
+    #[allow(missing_docs)]
     Imm(IOffset<N>),
+    #[allow(missing_docs)]
     Reg(Reg)
 }
 impl<const N: usize> std::fmt::Display for ImmOrReg<N> {
@@ -38,16 +43,16 @@ impl<const N: usize> std::fmt::Display for ImmOrReg<N> {
     }
 }
 
-/// An offset or immediate value.
+/// A value representing an offset or an immediate value.
 /// 
-/// The `OFF` type represents the backing type of this offset, 
-/// and the signedness of the offset is based on the signedness of the `OFF` type.
-/// 
-/// For example, `Offset<i16, _>` is a signed offset, whereas `Offset<u16, _>` is an unsigned offset.
+/// The `OFF` type represents the backing type of this offset. 
+/// The signedness of this offset type is dependent on the signedness of the `OFF` type:
+/// - `Offset<i16, _>`: signed offset
+/// - `Offset<u16, _>`: unsigned offset
 /// 
 /// `N` indicates the maximum bit size of this offset/immediate value.
 /// 
-/// For example, `Offset<i16, 5>` is equivalent to `ADD`/`AND`'s imm5 operand.
+/// For example, `Offset<i16, 5>` is used to represent `ADD`/`AND`'s imm5 operand.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Offset<OFF, const N: usize>(OFF);
 
@@ -79,18 +84,20 @@ impl<OFF: std::fmt::UpperHex, const N: usize> std::fmt::UpperHex for Offset<OFF,
 /// The errors that can result from calling `Offset::new`.
 #[derive(Debug, PartialEq, Eq)]
 pub enum OffsetNewError {
-    CannotFitUnsigned,
-    CannotFitSigned
+    /// The provided offset cannot fit an unsigned integer of the given bitsize.
+    CannotFitUnsigned(usize),
+    /// The provided offset cannot fit a signed integer of the given bitsize.
+    CannotFitSigned(usize)
 }
 macro_rules! impl_offset {
     ($Int:ty, $ErrIdent:ident) => {
         impl<const N: usize> Offset<$Int, N> {
-            /// Creates a new offset.
+            /// Creates a new offset value.
             /// This must fit within `N` bits of the representation, otherwise an error is raised.
             pub fn new(n: $Int) -> Result<Self, OffsetNewError> {
                 match n == (n << (16 - N)) >> (16 - N) {
                     true  => Ok(Offset(n)),
-                    false => Err(OffsetNewError::$ErrIdent),
+                    false => Err(OffsetNewError::$ErrIdent(N)),
                 }
             }
 
@@ -98,11 +105,13 @@ macro_rules! impl_offset {
             pub fn new_trunc(n: $Int) -> Self {
                 Self((n << (16 - N)) >> 16 - N)
             }
+
+            /// Gets the value of the offset.
             pub fn get(&self) -> $Int {
                 self.0
             }
 
-            /// 
+            /// Gets the representation of the value, setting any excess bits to 0.
             pub fn repr(&self) -> u16 {
                 (self.0 as u16) & ((1 << N) - 1)
             }
@@ -114,10 +123,18 @@ impl_offset!(i16, CannotFitSigned);
 
 /// An offset or a label.
 /// 
-/// During the first pass, this is replaced with a regular `Offset` type.
+/// This is used to represent PCOffset operands 
+/// (such as PCOffset9 in `LD` and `ST` and PCOffset11 in `JSR`).
+/// 
+/// During the first assembly pass, the label is resolved and
+/// replaced with a regular [`Offset`] value.
+/// 
+/// [`Offset`]: Offset
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum PCOffset<OFF, const N: usize> {
+    #[allow(missing_docs)]
     Offset(Offset<OFF, N>),
+    #[allow(missing_docs)]
     Label(String)
 }
 impl<OFF, const N: usize> std::fmt::Display for PCOffset<OFF, N> 
