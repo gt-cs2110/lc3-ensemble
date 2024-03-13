@@ -16,6 +16,7 @@ enum Instruction {
     Ld(Reg, PCOffset9),
     Ldi(Reg, PCOffset9),
     Ldr(Reg, Reg, Offset6),
+    Lea(Reg, PCOffset9),
     St(Reg, PCOffset9),
     Sti(Reg, PCOffset9),
     Str(Reg, Reg, Offset6),
@@ -53,6 +54,7 @@ impl std::fmt::Display for Instruction {
             Instruction::Ld(dr, off) => write!(f, "LD {dr}, {off}"),
             Instruction::Ldi(dr, off) => write!(f, "LDI {dr}, {off}"),
             Instruction::Ldr(dr, br, off) => write!(f, "LDR {dr}, {br}, {off}"),
+            Instruction::Lea(dr, off) => write!(f, "LEA {dr}, {off}"),
             Instruction::St(sr, off) => write!(f, "ST {sr}, {off}"),
             Instruction::Sti(sr, off) => write!(f, "STI {sr}, {off}"),
             Instruction::Str(sr, br, off) => write!(f, "STR {sr}, {br}, {off}"),
@@ -315,6 +317,13 @@ impl Parse for Instruction {
                 let off = parser.parse()?;
 
                 Ok(Self::Ldr(dr, br, off))
+            },
+            "LEA" => {
+                let dr = parser.parse()?;
+                parser.match_(parse_comma)?;
+                let off = parser.parse()?;
+
+                Ok(Self::Lea(dr, off))
             },
             "ST" => {
                 let sr = parser.parse()?;
