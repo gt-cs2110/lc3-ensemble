@@ -94,8 +94,11 @@ macro_rules! impl_offset {
         impl<const N: usize> Offset<$Int, N> {
             /// Creates a new offset value.
             /// This must fit within `N` bits of the representation, otherwise an error is raised.
+            /// 
+            /// This will also fail if `N` is too large (e.g., for `u16`, larger than 16).
             pub fn new(n: $Int) -> Result<Self, OffsetNewError> {
-                match n == (n << (16 - N)) >> (16 - N) {
+                assert!(N as u32 <= <$Int>::BITS, "bit size {N} exceeds size of backing ({})", <$Int>::BITS);
+                match n == (n << (<$Int>::BITS - N as u32)) >> (<$Int>::BITS - N as u32) {
                     true  => Ok(Offset(n)),
                     false => Err(OffsetNewError::$ErrIdent(N)),
                 }
