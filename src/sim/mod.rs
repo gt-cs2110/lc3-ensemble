@@ -28,7 +28,7 @@ impl Simulator {
             std::cmp::Ordering::Greater => self.cc = 0b001,
         }
     }
-    fn execute_at_pc(&mut self) {
+    fn step_in(&mut self) {
         let word = &self.mem[self.pc as usize];
         let instr = SimInstr::decode(word.data);
         self.pc += 1;
@@ -130,7 +130,7 @@ impl Simulator {
     }
     fn start(&mut self) {
         loop {
-            self.execute_at_pc();
+            self.step_in();
         }
     }
 }
