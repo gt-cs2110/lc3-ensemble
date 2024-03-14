@@ -4,7 +4,18 @@ struct Simulator {
     mem: [Word; 2usize.pow(16)],
     reg_file: [Word; 8],
     pc: u16,
-    cc: u8
+    cc: u8,
+
+    /// The number of subroutines or trap calls we've entered.
+    /// 
+    /// This is incremented when JSR/JSRR/TRAP is called,
+    /// and decremented when RET/JMP R7/RTI is called.
+    /// 
+    /// If this is 0, this is considered the global state,
+    /// and as such, decrementing should have no effect.
+    /// 
+    /// I am hoping this is large enough that it doesn't overflow :)
+    sr_entered: u64
 }
 struct Word {
     data: u16,
@@ -17,7 +28,8 @@ impl Simulator {
             mem: std::array::from_fn(|_| Word::new()),
             reg_file: std::array::from_fn(|_| Word::new()),
             pc: 0x3000,
-            cc: 0b010
+            cc: 0b010,
+            sr_entered: 0
         }
     }
 
@@ -26,6 +38,11 @@ impl Simulator {
             std::cmp::Ordering::Less    => self.cc = 0b100,
             std::cmp::Ordering::Equal   => self.cc = 0b010,
             std::cmp::Ordering::Greater => self.cc = 0b001,
+        }
+    }
+    fn start(&mut self) {
+        loop {
+            self.step_in();
         }
     }
     fn step_in(&mut self) {
@@ -71,6 +88,7 @@ impl Simulator {
 
                 self.reg_file[0b111].set(self.pc);
                 self.pc = self.pc.wrapping_add_signed(off);
+                self.sr_entered += 1;
             },
             SimInstr::And(dr, sr1, sr2) => {
                 let val1 = self.reg_file[sr1.0 as usize].data;
@@ -120,16 +138,35 @@ impl Simulator {
             SimInstr::Jmp(br) => {
                 let off = self.reg_file[br.0 as usize].data as i16;
                 self.pc = self.pc.wrapping_add_signed(off);
+
+                // check for RET
+                if br.0 == 7 {
+                    self.sr_entered = self.sr_entered.saturating_sub(1);
+                }
             },
             SimInstr::Lea(dr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
                 self.reg_file[dr.0 as usize].set(ea);
             },
-            SimInstr::Trap(vect) => panic!("bad trap {vect:02X}"),
+            SimInstr::Trap(vect) => {
+                self.pc = self.mem[vect.get() as usize].data;
+                self.sr_entered += 1;
+            },
         }
     }
-    fn start(&mut self) {
-        loop {
+    fn step_over(&mut self) {
+        let curr_frame = self.sr_entered;
+        self.step_in();
+        // step until we have landed back in the same frame
+        while curr_frame < self.sr_entered {
+            self.step_in();
+        }
+    }
+    fn step_out(&mut self) {
+        let curr_frame = self.sr_entered;
+        self.step_in();
+        // step until we get out of this frame
+        while curr_frame != 0 && curr_frame <= self.sr_entered {
             self.step_in();
         }
     }
