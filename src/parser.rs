@@ -126,7 +126,7 @@ impl Parse for Reg {
         })
     }
 }
-impl<const N: usize> Parse for ImmOrReg<N> {
+impl<const N: u32> Parse for ImmOrReg<N> {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
         match parser.parse() {
             Ok(imm) => Ok(ImmOrReg::Imm(imm)),
@@ -138,7 +138,7 @@ impl<const N: usize> Parse for ImmOrReg<N> {
     }
 }
 
-impl<const N: usize> Parse for Offset<i16, N> {
+impl<const N: u32> Parse for Offset<i16, N> {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
         parser.match_(|t| match t {
             &Token::Numeric(n) => Self::new(n as i16).map_err(|s| ParseErr::new(s.to_string())),
@@ -146,7 +146,7 @@ impl<const N: usize> Parse for Offset<i16, N> {
         })
     }
 }
-impl<const N: usize> Parse for Offset<u16, N> {
+impl<const N: u32> Parse for Offset<u16, N> {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
         parser.match_(|t| match t {
             &Token::Numeric(n) => Self::new(n).map_err(|s| ParseErr::new(s.to_string())),
@@ -155,7 +155,7 @@ impl<const N: usize> Parse for Offset<u16, N> {
     }
 }
 
-impl<OFF, const N: usize> Parse for PCOffset<OFF, N> 
+impl<OFF, const N: u32> Parse for PCOffset<OFF, N> 
     where Offset<OFF, N>: Parse
 {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {

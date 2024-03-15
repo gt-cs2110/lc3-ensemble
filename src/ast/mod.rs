@@ -19,7 +19,7 @@ pub type CondCode = u8;
 /// `N` indicates the maximum bit size of this offset/immediate value.
 /// 
 /// For example, `IOffset<5>` is used to represent `ADD`/`AND`'s imm5 operand.
-pub type IOffset<const N: usize> = Offset<i16, N>;
+pub type IOffset<const N: u32> = Offset<i16, N>;
 /// An unsigned 8-bit trap vector (used for `TRAP`).
 pub type TrapVect8 = Offset<u16, 8>;
 
@@ -28,13 +28,13 @@ pub type TrapVect8 = Offset<u16, 8>;
 /// This is used to handle the second operand `AND`/`ADD`, which
 /// can be either an immediate value or a register.
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub enum ImmOrReg<const N: usize> {
+pub enum ImmOrReg<const N: u32> {
     #[allow(missing_docs)]
     Imm(IOffset<N>),
     #[allow(missing_docs)]
     Reg(Reg)
 }
-impl<const N: usize> std::fmt::Display for ImmOrReg<N> {
+impl<const N: u32> std::fmt::Display for ImmOrReg<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ImmOrReg::Imm(imm) => imm.fmt(f),
@@ -54,27 +54,27 @@ impl<const N: usize> std::fmt::Display for ImmOrReg<N> {
 /// 
 /// For example, `Offset<i16, 5>` is used to represent `ADD`/`AND`'s imm5 operand.
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct Offset<OFF, const N: usize>(OFF);
+pub struct Offset<OFF, const N: u32>(OFF);
 
-impl<OFF: std::fmt::Display, const N: usize> std::fmt::Display for Offset<OFF, N> {
+impl<OFF: std::fmt::Display, const N: u32> std::fmt::Display for Offset<OFF, N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_char('#')?;
         self.0.fmt(f)
     }
 }
-impl<OFF: std::fmt::Binary, const N: usize> std::fmt::Binary for Offset<OFF, N> {
+impl<OFF: std::fmt::Binary, const N: u32> std::fmt::Binary for Offset<OFF, N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_char('b')?;
         self.0.fmt(f)
     }
 }
-impl<OFF: std::fmt::LowerHex, const N: usize> std::fmt::LowerHex for Offset<OFF, N> {
+impl<OFF: std::fmt::LowerHex, const N: u32> std::fmt::LowerHex for Offset<OFF, N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_char('x')?;
         self.0.fmt(f)
     }
 }
-impl<OFF: std::fmt::UpperHex, const N: usize> std::fmt::UpperHex for Offset<OFF, N> {
+impl<OFF: std::fmt::UpperHex, const N: u32> std::fmt::UpperHex for Offset<OFF, N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_char('X')?;
         self.0.fmt(f)
@@ -85,9 +85,9 @@ impl<OFF: std::fmt::UpperHex, const N: usize> std::fmt::UpperHex for Offset<OFF,
 #[derive(Debug, PartialEq, Eq)]
 pub enum OffsetNewError {
     /// The provided offset cannot fit an unsigned integer of the given bitsize.
-    CannotFitUnsigned(usize),
+    CannotFitUnsigned(u32),
     /// The provided offset cannot fit a signed integer of the given bitsize.
-    CannotFitSigned(usize)
+    CannotFitSigned(u32)
 }
 impl std::fmt::Display for OffsetNewError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -100,14 +100,14 @@ impl std::fmt::Display for OffsetNewError {
 
 macro_rules! impl_offset {
     ($Int:ty, $ErrIdent:ident) => {
-        impl<const N: usize> Offset<$Int, N> {
+        impl<const N: u32> Offset<$Int, N> {
             /// Creates a new offset value.
             /// This must fit within `N` bits of the representation, otherwise an error is raised.
             /// 
             /// This will also fail if `N` is too large (e.g., for `u16`, larger than 16).
             pub fn new(n: $Int) -> Result<Self, OffsetNewError> {
-                assert!(N as u32 <= <$Int>::BITS, "bit size {N} exceeds size of backing ({})", <$Int>::BITS);
-                match n == (n << (<$Int>::BITS - N as u32)) >> (<$Int>::BITS - N as u32) {
+                assert!(N <= <$Int>::BITS, "bit size {N} exceeds size of backing ({})", <$Int>::BITS);
+                match n == (n << (<$Int>::BITS - N)) >> (<$Int>::BITS - N) {
                     true  => Ok(Offset(n)),
                     false => Err(OffsetNewError::$ErrIdent(N)),
                 }
@@ -115,7 +115,7 @@ macro_rules! impl_offset {
 
             /// Creates a new offset by sign-extending the first N bits of the integer.
             pub fn new_trunc(n: $Int) -> Self {
-                Self((n << (16 - N)) >> 16 - N)
+                Self((n << (<$Int>::BITS - N)) >> (<$Int>::BITS - N))
             }
 
             /// Gets the value of the offset.
@@ -143,13 +143,13 @@ impl_offset!(i16, CannotFitSigned);
 /// 
 /// [`Offset`]: Offset
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub enum PCOffset<OFF, const N: usize> {
+pub enum PCOffset<OFF, const N: u32> {
     #[allow(missing_docs)]
     Offset(Offset<OFF, N>),
     #[allow(missing_docs)]
     Label(String)
 }
-impl<OFF, const N: usize> std::fmt::Display for PCOffset<OFF, N> 
+impl<OFF, const N: u32> std::fmt::Display for PCOffset<OFF, N> 
     where Offset<OFF, N>: std::fmt::Display
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
