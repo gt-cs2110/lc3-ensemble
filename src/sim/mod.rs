@@ -1,4 +1,5 @@
 use crate::ast::sim::SimInstr;
+use crate::ast::Reg;
 
 struct Simulator {
     mem: [Word; 2usize.pow(16)],
@@ -33,6 +34,13 @@ impl Simulator {
         }
     }
 
+    fn access_mem(&mut self, addr: u16) -> &mut Word {
+        &mut self.mem[addr as usize]
+    }
+    fn access_reg(&mut self, reg: Reg) -> &mut Word {
+        &mut self.reg_file[reg.0 as usize]
+    }
+    
     fn set_cc(&mut self, result: u16) {
         match (result as i16).cmp(&0) {
             std::cmp::Ordering::Less    => self.cc = 0b100,
@@ -46,8 +54,8 @@ impl Simulator {
         }
     }
     fn step_in(&mut self) {
-        let word = &self.mem[self.pc as usize];
-        let instr = SimInstr::decode(word.data);
+        let word = self.access_mem(self.pc).get_unsigned();
+        let instr = SimInstr::decode(word);
         self.pc += 1;
 
         match instr {
@@ -57,33 +65,33 @@ impl Simulator {
                 }
             },
             SimInstr::Add(dr, sr1, sr2) => {
-                let val1 = self.reg_file[sr1.0 as usize].data;
+                let val1 = self.access_reg(sr1).get_unsigned();
                 let val2 = match sr2 {
                     crate::ast::ImmOrReg::Imm(i2) => i2.get(),
-                    crate::ast::ImmOrReg::Reg(r2) => self.reg_file[r2.0 as usize].data as i16,
+                    crate::ast::ImmOrReg::Reg(r2) => self.access_reg(r2).get_signed(),
                 };
 
                 let result = val1.wrapping_add_signed(val2);
-                self.reg_file[dr.0 as usize].set(result);
+                self.access_reg(dr).set(result);
                 self.set_cc(result);
             },
             SimInstr::Ld(dr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
 
-                let val = self.mem[ea as usize].data;
-                self.reg_file[dr.0 as usize].set(val);
+                let val = self.access_mem(ea).get_unsigned();
+                self.access_reg(dr).set(val);
                 self.set_cc(val);
             },
             SimInstr::St(sr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
 
-                let val = self.reg_file[sr.0 as usize].data;
-                self.mem[ea as usize].set(val);
+                let val = self.access_reg(sr).get_unsigned();
+                self.access_mem(ea).set(val);
             },
             SimInstr::Jsr(op) => {
                 let off = match op {
                     crate::ast::ImmOrReg::Imm(off) => off.get(),
-                    crate::ast::ImmOrReg::Reg(br)  => self.reg_file[br.0 as usize].data as i16,
+                    crate::ast::ImmOrReg::Reg(br)  => self.access_reg(br).get_signed(),
                 };
 
                 self.reg_file[0b111].set(self.pc);
@@ -91,52 +99,52 @@ impl Simulator {
                 self.sr_entered += 1;
             },
             SimInstr::And(dr, sr1, sr2) => {
-                let val1 = self.reg_file[sr1.0 as usize].data;
+                let val1 = self.access_reg(sr1).get_unsigned();
                 let val2 = match sr2 {
                     crate::ast::ImmOrReg::Imm(i2) => i2.get() as u16,
-                    crate::ast::ImmOrReg::Reg(r2) => self.reg_file[r2.0 as usize].data,
+                    crate::ast::ImmOrReg::Reg(r2) => self.access_reg(r2).get_unsigned(),
                 };
 
                 let result = val1 & val2;
-                self.reg_file[dr.0 as usize].set(result);
+                self.access_reg(dr).set(result);
                 self.set_cc(result);
             },
             SimInstr::Ldr(dr, br, off) => {
-                let ea = self.reg_file[br.0 as usize].data.wrapping_add_signed(off.get());
+                let ea = self.access_reg(br).get_unsigned().wrapping_add_signed(off.get());
 
-                let val = self.mem[ea as usize].data;
-                self.reg_file[dr.0 as usize].set(val);
+                let val = self.access_mem(ea).get_unsigned();
+                self.access_reg(dr).set(val);
                 self.set_cc(val);
             },
             SimInstr::Str(sr, br, off) => {
-                let ea = self.reg_file[br.0 as usize].data.wrapping_add_signed(off.get());
+                let ea = self.access_reg(br).get_unsigned().wrapping_add_signed(off.get());
                 
-                let val = self.reg_file[sr.0 as usize].data;
-                self.mem[ea as usize].set(val);
+                let val = self.access_reg(sr).get_unsigned();
+                self.access_mem(ea).set(val);
             },
             SimInstr::Rti => todo!("rti not yet implemented"),
             SimInstr::Not(dr, sr) => {
-                let val1 = self.reg_file[sr.0 as usize].data;
+                let val1 = self.access_reg(sr).get_unsigned();
                 
                 let result = !val1;
-                self.reg_file[dr.0 as usize].set(result);
+                self.access_reg(dr).set(result);
                 self.set_cc(result);
             },
             SimInstr::Ldi(dr, off) => {
-                let ea = self.mem[self.pc.wrapping_add_signed(off.get()) as usize].data;
+                let ea = self.access_mem(self.pc.wrapping_add_signed(off.get())).get_unsigned();
 
-                let val = self.mem[ea as usize].data;
-                self.reg_file[dr.0 as usize].set(val);
+                let val = self.access_mem(ea).get_unsigned();
+                self.access_reg(dr).set(val);
                 self.set_cc(val);
             },
             SimInstr::Sti(sr, off) => {
-                let ea = self.mem[self.pc.wrapping_add_signed(off.get()) as usize].data;
+                let ea = self.access_mem(self.pc.wrapping_add_signed(off.get())).get_unsigned();
 
-                let val = self.reg_file[sr.0 as usize].data;
-                self.mem[ea as usize].set(val);
+                let val = self.access_reg(sr).get_unsigned();
+                self.access_mem(ea).set(val);
             },
             SimInstr::Jmp(br) => {
-                let off = self.reg_file[br.0 as usize].data as i16;
+                let off = self.access_reg(br).get_signed();
                 self.pc = self.pc.wrapping_add_signed(off);
 
                 // check for RET
@@ -146,10 +154,10 @@ impl Simulator {
             },
             SimInstr::Lea(dr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
-                self.reg_file[dr.0 as usize].set(ea);
+                self.access_reg(dr).set(ea);
             },
             SimInstr::Trap(vect) => {
-                self.pc = self.mem[vect.get() as usize].data;
+                self.pc = self.access_mem(vect.get()).get_unsigned();
                 self.sr_entered += 1;
             },
         }
@@ -179,6 +187,12 @@ impl Word {
         }
     }
 
+    fn get_unsigned(&self) -> u16 {
+        self.data
+    }
+    fn get_signed(&self) -> i16 {
+        self.data as i16
+    }
     fn set(&mut self, word: u16) {
         self.data = word;
         self.init = true;

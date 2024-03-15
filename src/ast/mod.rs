@@ -3,7 +3,7 @@ pub mod sim;
 use std::fmt::Write as _;
 
 /// A register. Must be between 0 and 7.
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Reg(pub(crate) u8);
 impl std::fmt::Display for Reg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
