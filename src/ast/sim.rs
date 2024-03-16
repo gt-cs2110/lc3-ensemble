@@ -1,7 +1,9 @@
 //! This module is used for holding simulation instructions ([`SimInstr`]),
-//! which are instructions that directly map to bytecode
-//! (as opposed to [todo_include_disp_instruction]) which
-//! map to assembly code.
+//! which are instructions that directly map to bytecode.
+//! 
+//! For instructions that map to assembly code, see [`asm::AsmInstr`].
+//! 
+//! [`asm::AsmInstr`]: [`crate::ast::asm::AsmInstr`]
 
 use std::ops::Range;
 
@@ -25,7 +27,7 @@ const OP_TRAP: u16 = 0b1111;
 
 /// Instructions that map one-to-one to bytecode representation.
 /// 
-/// This erases all notions of aliases and labels.
+/// The variants in this enum have no notions of aliases and labels.
 /// For instructions that map to typeable assembly code, refer to [todo_include_disp_instruction].
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum SimInstr {

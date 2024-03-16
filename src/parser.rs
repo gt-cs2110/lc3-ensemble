@@ -5,88 +5,9 @@ use std::borrow::Cow;
 
 use logos::Span;
 
-use crate::ast::{CondCode, IOffset, ImmOrReg, Offset, PCOffset, Reg, TrapVect8};
+use crate::ast::asm::{Directive, AsmInstr};
+use crate::ast::{ImmOrReg, Offset, PCOffset, Reg};
 use crate::lexer::{Ident, Token};
-
-type PCOffset9 = PCOffset<i16, 9>;
-type PCOffset11 = PCOffset<i16, 11>;
-
-enum Instruction {
-    ADD(Reg, Reg, ImmOrReg<5>),
-    AND(Reg, Reg, ImmOrReg<5>),
-    NOT(Reg, Reg),
-    BR(CondCode, PCOffset9),
-    JMP(Reg),
-    JSR(PCOffset11),
-    JSRR(Reg),
-    LD(Reg, PCOffset9),
-    LDI(Reg, PCOffset9),
-    LDR(Reg, Reg, IOffset<6>),
-    LEA(Reg, PCOffset9),
-    ST(Reg, PCOffset9),
-    STI(Reg, PCOffset9),
-    STR(Reg, Reg, IOffset<6>),
-    TRAP(TrapVect8),
-
-    // Extra instructions
-    NOP,
-    RET,
-    RTI,
-    GETC,
-    OUT,
-    PUTC,
-    PUTS,
-    IN,
-    PUTSP,
-    HALT
-}
-
-impl std::fmt::Display for Instruction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Instruction::ADD(dr, sr1, sr2) => write!(f, "ADD {dr}, {sr1}, {sr2}"),
-            Instruction::AND(dr, sr1, sr2) => write!(f, "AND {dr}, {sr1}, {sr2}"),
-            Instruction::NOT(dr, sr) => write!(f, "NOT {dr}, {sr}"),
-            Instruction::BR(cc, off) => {
-                write!(f, "BR")?;
-                if cc & 0b100 != 0 { write!(f, "n")?; };
-                if cc & 0b010 != 0 { write!(f, "z")?; };
-                if cc & 0b001 != 0 { write!(f, "p")?; };
-                write!(f, ", {off}")
-            },
-            Instruction::JMP(br) => write!(f, "JMP {br}"),
-            Instruction::JSR(off) => write!(f, "JSR {off}"),
-            Instruction::JSRR(br) => write!(f, "JSRR {br}"),
-            Instruction::LD(dr, off) => write!(f, "LD {dr}, {off}"),
-            Instruction::LDI(dr, off) => write!(f, "LDI {dr}, {off}"),
-            Instruction::LDR(dr, br, off) => write!(f, "LDR {dr}, {br}, {off}"),
-            Instruction::LEA(dr, off) => write!(f, "LEA {dr}, {off}"),
-            Instruction::ST(sr, off) => write!(f, "ST {sr}, {off}"),
-            Instruction::STI(sr, off) => write!(f, "STI {sr}, {off}"),
-            Instruction::STR(sr, br, off) => write!(f, "STR {sr}, {br}, {off}"),
-            Instruction::TRAP(vect) => write!(f, "TRAP {vect:02X}"),
-            Instruction::NOP   => f.write_str("NOP"),
-            Instruction::RET   => f.write_str("RET"),
-            Instruction::RTI   => f.write_str("RTI"),
-            Instruction::GETC  => f.write_str("GETC"),
-            Instruction::OUT   => f.write_str("OUT"),
-            Instruction::PUTC  => f.write_str("PUTC"),
-            Instruction::PUTS  => f.write_str("PUTS"),
-            Instruction::IN    => f.write_str("IN"),
-            Instruction::PUTSP => f.write_str("PUTSP"),
-            Instruction::HALT  => f.write_str("HALT"),
-        }
-    }
-}
-
-enum Directive {
-    Orig(Offset<u16, 16>),
-    Fill(Offset<u16, 16>),
-    Blkw(Offset<u16, 16>),
-    Stringz(String),
-    End,
-    // External
-}
 
 struct ParseErr {
     msg: Cow<'static, str>
@@ -200,7 +121,7 @@ fn parse_comma(t: &Token) -> Result<(), ParseErr> {
     }
 }
 
-impl Parse for Instruction {
+impl Parse for AsmInstr {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
         let opcode = parser.match_(|t| match t {
             Token::Ident(Ident::Label(_)) => Err(ParseErr::new("expected instruction")),

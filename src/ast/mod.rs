@@ -1,5 +1,6 @@
 //! Structs relating to the ASTs created from assembly files.
 
+pub mod asm;
 pub mod sim;
 
 use std::fmt::Write as _;
