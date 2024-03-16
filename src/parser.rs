@@ -9,14 +9,22 @@ use crate::ast::asm::{AsmInstr, Directive, Stmt, StmtKind};
 use crate::ast::{ImmOrReg, Offset, PCOffset, Reg};
 use crate::lexer::{Ident, Token};
 
+#[derive(Debug)]
 struct ParseErr {
-    msg: Cow<'static, str>
+    msg: Cow<'static, str>,
+    span: Span
 }
 impl ParseErr {
-    fn new<C: Into<Cow<'static, str>>>(msg: C) -> Self {
-        Self { msg: msg.into() }
+    fn new<C: Into<Cow<'static, str>>>(msg: C, span: Span) -> Self {
+        Self { msg: msg.into(), span }
     }
 }
+impl std::fmt::Display for ParseErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}: {}", self.span, self.msg)
+    }
+}
+
 trait Parse: Sized {
     fn parse(parser: &mut Parser) -> Result<Self, ParseErr>;
 }
@@ -30,7 +38,7 @@ impl Parser {
         let tokens = Token::lexer(stream).spanned()
             .map(|(m_token, span)| match m_token {
                 Ok(token) => Ok((token, span)),
-                Err(err)  => Err(ParseErr::new(err.to_string())),
+                Err(err)  => Err(ParseErr::new(err.to_string(), span)),
             })
             .filter(|t| !matches!(t, Ok((Token::Comment, _)))) // filter comments
             .collect::<Result<_, _>>()?;
@@ -55,10 +63,10 @@ impl Parser {
     fn parse<P: Parse>(&mut self) -> Result<P, ParseErr> {
         P::parse(self)
     }
-    fn match_<T>(&mut self, pred: impl FnOnce(&Token) -> Result<T, ParseErr>) -> Result<T, ParseErr> {
-        let Some((tok, _)) = self.peek() else { return Err(ParseErr::new("unexpected end of line")) };
+    fn match_<T>(&mut self, pred: impl FnOnce(&Token, Span) -> Result<T, ParseErr>) -> Result<T, ParseErr> {
+        let Some((tok, span)) = self.peek() else { return Err(ParseErr::new("unexpected end of line", self.cursor())) };
         
-        let result = pred(tok);
+        let result = pred(tok, span.clone());
         if result.is_ok() {
             self.advance();
         }
@@ -70,16 +78,16 @@ impl Parser {
                 self.advance();
                 Ok(())
             }
-            Some(_) => Err(ParseErr::new("expected end of line")),
+            Some(_) => Err(ParseErr::new("expected end of line", self.cursor())),
         }
     }
 }
 
 impl Parse for Reg {
     fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
-        parser.match_(|t| match t {
+        parser.match_(|t, span| match t {
             &Token::Reg(reg) => Ok(Reg(reg)),
-            _ => Err(ParseErr::new("expected register")),
+            _ => Err(ParseErr::new("expected register", span)),
         })
     }
 }
@@ -89,7 +97,7 @@ impl<const N: u32> Parse for ImmOrReg<N> {
             Ok(imm) => Ok(ImmOrReg::Imm(imm)),
             Err(_) => match parser.parse() {
                 Ok(reg) => Ok(ImmOrReg::Reg(reg)),
-                Err(_) => Err(ParseErr::new("expected immediate value or register")),
+                Err(_) => Err(ParseErr::new("expected immediate value or register", parser.cursor())),
             }
         }
     }
@@ -97,29 +105,29 @@ impl<const N: u32> Parse for ImmOrReg<N> {
 
 impl<const N: u32> Parse for Offset<i16, N> {
     fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
-        parser.match_(|t| {
+        parser.match_(|t, span| {
             let off_val = match *t {
                 Token::Unsigned(n) => i16::try_from(n).map_err(|_| todo!("impl lex error if overflow")),
                 Token::Signed(n) => Ok(n),
-                _ => Err(ParseErr::new("expected immediate value"))
+                _ => Err(ParseErr::new("expected immediate value", span.clone()))
             }?;
             
             Self::new(off_val)
-                .map_err(|s| ParseErr::new(s.to_string()))
+                .map_err(|s| ParseErr::new(s.to_string(), span))
         })
     }
 }
 impl<const N: u32> Parse for Offset<u16, N> {
     fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
-        parser.match_(|t| {
+        parser.match_(|t, span| {
             let off_val = match *t {
                 Token::Unsigned(n) => Ok(n),
                 Token::Signed(n) => u16::try_from(n).map_err(|_| todo!("impl lex error if overflow")),
-                _ => Err(ParseErr::new("expected immediate value"))
+                _ => Err(ParseErr::new("expected immediate value", span.clone()))
             }?;
             
             Self::new(off_val)
-                .map_err(|s| ParseErr::new(s.to_string()))
+                .map_err(|s| ParseErr::new(s.to_string(), span))
         })
     }
 }
@@ -132,36 +140,36 @@ impl<OFF, const N: u32> Parse for PCOffset<OFF, N>
             Ok(off) => Ok(PCOffset::Offset(off)),
             Err(_) => match parser.match_(parse_label) {
                 Ok(s) => Ok(PCOffset::Label(s)),
-                Err(_) => Err(ParseErr::new("expected offset or label")),
+                Err(_) => Err(ParseErr::new("expected offset or label", parser.cursor())),
             },
         }
     }
 }
 
-fn parse_comma(t: &Token) -> Result<(), ParseErr> {
+fn parse_comma(t: &Token, span: Span) -> Result<(), ParseErr> {
     match t {
         Token::Comma => Ok(()),
-        _ => Err(ParseErr::new("expected comma"))
+        _ => Err(ParseErr::new("expected comma", span))
     }
 }
-fn parse_colon(t: &Token) -> Result<(), ParseErr> {
+fn parse_colon(t: &Token, span: Span) -> Result<(), ParseErr> {
     match t {
         Token::Colon => Ok(()),
-        _ => Err(ParseErr::new("expected colon"))
+        _ => Err(ParseErr::new("expected colon", span))
     }
 }
-fn parse_label(t: &Token) -> Result<String, ParseErr> {
+fn parse_label(t: &Token, span: Span) -> Result<String, ParseErr> {
     match t {
         Token::Ident(Ident::Label(s)) => Ok(s.to_string()),
-        _ => Err(ParseErr::new("expected offset or label"))
+        _ => Err(ParseErr::new("expected offset or label", span))
     }
 }
 
 impl Parse for AsmInstr {
     fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
-        let opcode = parser.match_(|t| match t {
+        let opcode = parser.match_(|t, span| match t {
             Token::Ident(id) if !matches!(id, Ident::Label(_)) => Ok(id.clone()),
-            _ => Err(ParseErr::new("expected instruction"))
+            _ => Err(ParseErr::new("expected instruction", span))
         })?;
 
         match opcode {
@@ -265,24 +273,24 @@ impl Parse for AsmInstr {
             Ident::IN => Ok(Self::IN),
             Ident::PUTSP => Ok(Self::PUTSP),
             Ident::HALT => Ok(Self::HALT),
-            Ident::Label(_) => Err(ParseErr::new("expected instruction")) // should be unreachable
+            Ident::Label(_) => Err(ParseErr::new("expected instruction", parser.cursor())) // should be unreachable
         }
     }
 }
 
 impl Parse for Directive {
     fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
-        let directive = parser.match_(|t| match t {
-            Token::Unsigned(_)   => Err(ParseErr::new("unexpected numeric")),
-            Token::Signed(_)     => Err(ParseErr::new("unexpected numeric")),
-            Token::Reg(_)        => Err(ParseErr::new("unexpected register")),
-            Token::Ident(_)      => Err(ParseErr::new("unexpected label")),
+        let directive = parser.match_(|t, span| match t {
+            Token::Unsigned(_)   => Err(ParseErr::new("unexpected numeric", span)),
+            Token::Signed(_)     => Err(ParseErr::new("unexpected numeric", span)),
+            Token::Reg(_)        => Err(ParseErr::new("unexpected register", span)),
+            Token::Ident(_)      => Err(ParseErr::new("unexpected label", span)),
             Token::Directive(id) => Ok(id.to_string()),
-            Token::String(_)     => Err(ParseErr::new("unexpected string literal")),
-            Token::Colon         => Err(ParseErr::new("unexpected colon")),
-            Token::Comma         => Err(ParseErr::new("unexpected comma")),
-            Token::Comment       => Err(ParseErr::new("unexpected comment")),
-            Token::NewLine       => Err(ParseErr::new("unexpected new line")),
+            Token::String(_)     => Err(ParseErr::new("unexpected string literal", span)),
+            Token::Colon         => Err(ParseErr::new("unexpected colon", span)),
+            Token::Comma         => Err(ParseErr::new("unexpected comma", span)),
+            Token::Comment       => Err(ParseErr::new("unexpected comment", span)),
+            Token::NewLine       => Err(ParseErr::new("unexpected new line", span)),
         })?;
 
         match &*directive.to_uppercase() {
@@ -292,17 +300,17 @@ impl Parse for Directive {
                 //
                 // Unlike other numeric operands, it can accept both unsigned and signed literals,
                 // so it cannot be parsed with PCOffset's parser, and therefore has to be handled differently.
-                parser.match_(|t| {
+                parser.match_(|t, span| {
                     let operand = 'operand: {
                         let off_val = match t {
                             &Token::Unsigned(n) => Ok(n),
                             &Token::Signed(n)   => Ok(n as u16),
                             Token::Ident(Ident::Label(s)) => break 'operand PCOffset::Label(s.to_string()),
-                            _ => Err(ParseErr::new("expected numeric or label"))
+                            _ => Err(ParseErr::new("expected numeric or label", span.clone()))
                         }?;
 
                         let off = Offset::new(off_val)
-                            .map_err(|s| ParseErr::new(s.to_string()))?;
+                            .map_err(|s| ParseErr::new(s.to_string(), span))?;
 
                         PCOffset::Offset(off)
                     };
@@ -314,19 +322,19 @@ impl Parse for Directive {
                 let block_size: Offset<_, 16> = parser.parse()?;
                 match block_size.get() != 0 {
                     true  => Ok(Self::Blkw(block_size)),
-                    false => Err(ParseErr::new("block size must be greater than 0"))
+                    false => Err(ParseErr::new("block size must be greater than 0", parser.cursor()))
                 }
             }
             "STRINGZ" => {
-                let string = parser.match_(|t| match t {
+                let string = parser.match_(|t, span| match t {
                     Token::String(st) => Ok(st.to_string()),
-                    _ => Err(ParseErr::new("expected string literal")),
+                    _ => Err(ParseErr::new("expected string literal", span)),
                 })?;
 
                 Ok(Self::Stringz(string))
             }
             "END" => Ok(Self::End),
-            _ => Err(ParseErr::new("invalid directive"))
+            _ => Err(ParseErr::new("invalid directive", parser.cursor()))
         }
     }
 }
@@ -336,7 +344,7 @@ impl Parse for StmtKind {
         match parser.peek() {
             Some((Token::Directive(_), _)) => Ok(StmtKind::Directive(parser.parse()?)),
             Some((Token::Ident(id), _)) if !matches!(id, Ident::Label(_)) => Ok(StmtKind::Instr(parser.parse()?)),
-            _ => Err(ParseErr::new("expected instruction or directive"))
+            _ => Err(ParseErr::new("expected instruction or directive", parser.cursor()))
         }
     }
 }
