@@ -33,7 +33,7 @@ impl Parser<'_> {
         P::parse(self)
     }
     fn match_<T>(&mut self, pred: impl FnOnce(&Token) -> Result<T, ParseErr>) -> Result<T, ParseErr> {
-        let Some((tok, _)) = self.peek() else { return Err(ParseErr::new("unexpected eol")) };
+        let Some((tok, _)) = self.peek() else { return Err(ParseErr::new("unexpected end of line")) };
         
         let result = pred(tok);
         if result.is_ok() {
@@ -41,7 +41,14 @@ impl Parser<'_> {
         }
         result
     }
+    fn match_end(&mut self) -> Result<(), ParseErr> {
+        match self.peek() {
+            Some(_) => Err(ParseErr::new("expected end of line")),
+            None => Ok(())
+        }
+    }
 }
+
 impl<'s> Iterator for Parser<'s> {
     type Item = &'s (Token, Span);
 
@@ -323,6 +330,7 @@ impl Parse for Stmt {
             labels.push(label);
         }
         let nucleus = parser.parse()?;
+        parser.match_end()?;
 
         Ok(Self { labels, nucleus })
     }
