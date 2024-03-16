@@ -82,7 +82,7 @@ impl std::fmt::Display for AsmInstr {
 
 pub enum Directive {
     Orig(Offset<u16, 16>),
-    Fill(Offset<u16, 16>),
+    Fill(PCOffset<u16, 16>),
     Blkw(Offset<u16, 16>),
     Stringz(String),
     End,

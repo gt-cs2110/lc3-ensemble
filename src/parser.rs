@@ -252,19 +252,26 @@ impl Parse for Directive {
         match &*directive.to_uppercase() {
             "ORIG" => Ok(Self::Orig(parser.parse()?)),
             "FILL" => {
-                // Unlike other numeric operands, this can accept both unsigned or signed literals,
-                // and therefore has to be handled differently.
+                // .fill is weird.
+                //
+                // Unlike other numeric operands, it can accept both unsigned and signed literals,
+                // so it cannot be parsed with PCOffset's parser, and therefore has to be handled differently.
                 parser.match_(|t| {
-                    let off_val = match *t {
-                        Token::Unsigned(n) => Ok(n),
-                        Token::Signed(n) => Ok(n as u16),
-                        _ => Err(ParseErr::new("expected numeric"))
-                    }?;
-                    
-                    let off = Offset::new(off_val)
-                        .map_err(|s| ParseErr::new(s.to_string()))?;
+                    let operand = 'operand: {
+                        let off_val = match t {
+                            &Token::Unsigned(n) => Ok(n),
+                            &Token::Signed(n)   => Ok(n as u16),
+                            Token::Ident(Ident::Label(s)) => break 'operand PCOffset::Label(s.to_string()),
+                            _ => Err(ParseErr::new("expected numeric or label"))
+                        }?;
 
-                    Ok(Self::Fill(off))
+                        let off = Offset::new(off_val)
+                            .map_err(|s| ParseErr::new(s.to_string()))?;
+
+                        PCOffset::Offset(off)
+                    };
+                    
+                    Ok(Self::Fill(operand))
                 })
             }
             "BLKW" => {
