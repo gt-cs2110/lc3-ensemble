@@ -319,6 +319,8 @@ fn get_bits(n: u16, r: Range<usize>) -> u16 {
     (n >> r.start) & ((1 << len) - 1)
 }
 
+/// Given a sequence of values and ranges, it writes each value into its corresponding range,
+/// truncating the input value if it is too long.
 fn join_bits<const N: usize>(bits: [(u16, Range<usize>); N]) -> u16 {
     bits.into_iter()
         .map(|(val, Range { start, end })| {
