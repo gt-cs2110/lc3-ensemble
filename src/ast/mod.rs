@@ -1,6 +1,7 @@
 pub mod sim;
 
 use std::fmt::Write as _;
+use offset_base::OffsetBacking;
 
 /// A register. Must be between 0 and 7.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -98,40 +99,78 @@ impl std::fmt::Display for OffsetNewError {
     }
 }
 
-macro_rules! impl_offset {
-    ($Int:ty, $ErrIdent:ident) => {
-        impl<const N: u32> Offset<$Int, N> {
-            /// Creates a new offset value.
-            /// This must fit within `N` bits of the representation, otherwise an error is raised.
-            /// 
-            /// This will also fail if `N` is too large (e.g., for `u16`, larger than 16).
-            pub fn new(n: $Int) -> Result<Self, OffsetNewError> {
-                assert!(N <= <$Int>::BITS, "bit size {N} exceeds size of backing ({})", <$Int>::BITS);
-                match n == (n << (<$Int>::BITS - N)) >> (<$Int>::BITS - N) {
-                    true  => Ok(Offset(n)),
-                    false => Err(OffsetNewError::$ErrIdent(N)),
+mod offset_base {
+    use super::OffsetNewError;
+
+    /// Any type that could store a value for [`Offset`].
+    /// 
+    /// [`Offset`]: super::Offset
+    pub trait OffsetBacking: Copy + Eq {
+        /// How many bits are contained within this backing.
+        /// 
+        /// For example, `u16` has 16 bits and thus BITS == 16.
+        const BITS: u32;
+
+        /// Truncates the given value to the provided bit size.
+        /// 
+        /// This bit size is always known to be less than BITS.
+        fn truncate(self, bit_size: u32) -> Self;
+
+        /// The error to raise if a given value doesn't match
+        /// its provided value when truncated to a given bit_size.
+        fn does_not_fit_error(bit_size: u32) -> OffsetNewError;
+    }
+    
+    macro_rules! impl_offset_backing_for_ints {
+        ($($Int:ty: $Err:ident),*) => {
+            $(
+                impl OffsetBacking for $Int {
+                    const BITS: u32 = Self::BITS;
+                
+                    fn truncate(self, bit_size: u32) -> Self {
+                        (self << (Self::BITS - bit_size)) >> (Self::BITS - bit_size)
+                    }
+
+                    fn does_not_fit_error(bit_size: u32) -> OffsetNewError {
+                        OffsetNewError::$Err(bit_size)
+                    }
                 }
-            }
-
-            /// Creates a new offset by sign-extending the first N bits of the integer.
-            pub fn new_trunc(n: $Int) -> Self {
-                Self((n << (<$Int>::BITS - N)) >> (<$Int>::BITS - N))
-            }
-
-            /// Gets the value of the offset.
-            pub fn get(&self) -> $Int {
-                self.0
-            }
-
-            /// Gets the representation of the value, setting any excess bits to 0.
-            pub fn repr(&self) -> u16 {
-                (self.0 as u16) & ((1 << N) - 1)
-            }
+            )*
         }
     }
+    impl_offset_backing_for_ints! {
+        u16: CannotFitUnsigned,
+        i16: CannotFitSigned
+    }
 }
-impl_offset!(u16, CannotFitUnsigned);
-impl_offset!(i16, CannotFitSigned);
+
+impl<OFF: OffsetBacking, const N: u32> Offset<OFF, N> {
+    /// Creates a new offset value.
+    /// This must fit within `N` bits of the representation, otherwise an error is raised.
+    /// 
+    /// This will also fail if `N` is too large (e.g., for `u16`, larger than 16).
+    pub fn new(n: OFF) -> Result<Self, OffsetNewError> {
+        assert!(N <= OFF::BITS, "bit size {N} exceeds size of backing ({})", OFF::BITS);
+        match n == n.truncate(N) {
+            true  => Ok(Offset(n)),
+            false => Err(OFF::does_not_fit_error(N)),
+        }
+    }
+
+    /// Creates a new offset by extending the first N bits of the integer,
+    /// and discarding the rest.
+    /// 
+    /// The extension is considered sign-extended if the offset's backing is signed,
+    /// and it is considered zero-extended if the offset's backing is unsigned.
+    pub fn new_trunc(n: OFF) -> Self {
+        Self(n.truncate(N))
+    }
+
+    /// Gets the value of the offset.
+    pub fn get(&self) -> OFF {
+        self.0
+    }
+}
 
 /// An offset or a label.
 /// 
