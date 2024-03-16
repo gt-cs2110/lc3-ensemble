@@ -76,6 +76,15 @@ impl std::fmt::Display for Instruction {
     }
 }
 
+enum Directive {
+    Orig(Offset<u16, 16>),
+    Fill(Offset<u16, 16>),
+    Blkw(Offset<u16, 16>),
+    Stringz(String),
+    End,
+    // External
+}
+
 struct ParseErr {
     msg: Cow<'static, str>
 }
@@ -190,7 +199,7 @@ fn parse_comma(t: &Token) -> Result<(), ParseErr> {
 
 impl Parse for Instruction {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
-        let opcode = parser.match_(|t| match t {
+        let mut opcode = parser.match_(|t| match t {
             Token::Unsigned(_)  => Err(ParseErr::new("unexpected numeric")),
             Token::Signed(_)    => Err(ParseErr::new("unexpected numeric")),
             Token::Reg(_)       => Err(ParseErr::new("unexpected register")),
@@ -304,6 +313,59 @@ impl Parse for Instruction {
             "PUTSP" => Ok(Self::Putsp),
             "HALT" => Ok(Self::Halt),
             _ => Err(ParseErr::new("invalid instruction"))
+        }
+    }
+}
+
+impl Parse for Directive {
+    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+        let directive = parser.match_(|t| match t {
+            Token::Unsigned(_)   => Err(ParseErr::new("unexpected numeric")),
+            Token::Signed(_)     => Err(ParseErr::new("unexpected numeric")),
+            Token::Reg(_)        => Err(ParseErr::new("unexpected register")),
+            Token::Ident(_)      => Err(ParseErr::new("unexpected label")),
+            Token::Directive(id) => Ok(id.to_string()),
+            Token::String(_)     => Err(ParseErr::new("unexpected string literal")),
+            Token::Colon         => Err(ParseErr::new("unexpected colon")),
+            Token::Comma         => Err(ParseErr::new("unexpected comma")),
+            Token::Comment       => Err(ParseErr::new("unexpected comment")), // FIXME
+        })?;
+
+        match &*directive.to_uppercase() {
+            "ORIG" => Ok(Self::Orig(parser.parse()?)),
+            "FILL" => {
+                // Unlike other numeric operands, this can accept both unsigned or signed literals,
+                // and therefore has to be handled differently.
+                parser.match_(|t| {
+                    let off_val = match *t {
+                        Token::Unsigned(n) => Ok(n),
+                        Token::Signed(n) => Ok(n as u16),
+                        _ => Err(ParseErr::new("expected numeric"))
+                    }?;
+                    
+                    let off = Offset::new(off_val)
+                        .map_err(|s| ParseErr::new(s.to_string()))?;
+
+                    Ok(Self::Fill(off))
+                })
+            }
+            "BLKW" => {
+                let block_size: Offset<_, 16> = parser.parse()?;
+                match block_size.get() != 0 {
+                    true  => Ok(Self::Blkw(block_size)),
+                    false => Err(ParseErr::new("block size must be greater than 0"))
+                }
+            }
+            "STRINGZ" => {
+                let string = parser.match_(|t| match t {
+                    Token::String(st) => Ok(st.to_string()),
+                    _ => Err(ParseErr::new("expected string literal")),
+                })?;
+
+                Ok(Self::Stringz(string))
+            }
+            "END" => Ok(Self::End),
+            _ => Err(ParseErr::new("invalid directive"))
         }
     }
 }
