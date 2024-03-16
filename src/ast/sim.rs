@@ -25,10 +25,14 @@ const OP_JMP: u16  = 0b1100;
 const OP_LEA: u16  = 0b1110; 
 const OP_TRAP: u16 = 0b1111; 
 
-/// Instructions that map one-to-one to bytecode representation.
+/// An enum representing all of the possible instructions in LC-3 bytecode.
 /// 
-/// The variants in this enum have no notions of aliases and labels.
-/// For instructions that map to typeable assembly code, refer to [todo_include_disp_instruction].
+/// The variants in this enum represent instructions after the both assembly passes.
+/// There are no notions of aliases and labels in the variants in this enum.
+/// 
+/// For instructions that map to typeable assembly code, refer to [`asm::AsmInstr`].
+/// 
+/// [`asm::AsmInstr`]: [`crate::ast::asm::AsmInstr`]
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum SimInstr {
     #[allow(missing_docs)]

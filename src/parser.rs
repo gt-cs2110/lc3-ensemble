@@ -148,13 +148,6 @@ impl Parse for AsmInstr {
 
                 Ok(Self::AND(dr, sr1, sr2))
             },
-            Ident::NOT => {
-                let dr = parser.parse()?;
-                parser.match_(parse_comma)?;
-                let sr = parser.parse()?;
-
-                Ok(Self::NOT(dr, sr))
-            },
             Ident::BR => Ok(Self::BR(0b111, parser.parse()?)),
             Ident::BRP => Ok(Self::BR(0b001, parser.parse()?)),
             Ident::BRZ => Ok(Self::BR(0b010, parser.parse()?)),
@@ -196,6 +189,15 @@ impl Parse for AsmInstr {
 
                 Ok(Self::LEA(dr, off))
             },
+            Ident::NOT => {
+                let dr = parser.parse()?;
+                parser.match_(parse_comma)?;
+                let sr = parser.parse()?;
+
+                Ok(Self::NOT(dr, sr))
+            },
+            Ident::RET => Ok(Self::RET),
+            Ident::RTI => Ok(Self::RTI),
             Ident::ST => {
                 let sr = parser.parse()?;
                 parser.match_(parse_comma)?;
@@ -221,8 +223,6 @@ impl Parse for AsmInstr {
             },
             Ident::TRAP => Ok(Self::TRAP(parser.parse()?)),
             Ident::NOP => Ok(Self::NOP),
-            Ident::RET => Ok(Self::RET),
-            Ident::RTI => Ok(Self::RTI),
             Ident::GETC => Ok(Self::GETC),
             Ident::OUT => Ok(Self::OUT),
             Ident::PUTC => Ok(Self::PUTC),
