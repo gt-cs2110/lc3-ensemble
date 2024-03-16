@@ -31,9 +31,8 @@ pub enum Token {
     /// - an instruction (e.g. `ADD`, `AND`, `NOT`)
     ///
     /// This token type is case insensitive. 
-    /// It cannot be of the format X000, B000, or R000.
-    #[regex(r"[A-Za-z_]\w*", |lx| lx.slice().to_string())]
-    Ident(String),
+    #[regex(r"[A-Za-z_]\w*", |lx| lx.slice().parse::<Ident>().expect("should be infallible"))]
+    Ident(Ident),
 
     /// A directive (e.g., `.orig`, `.end`).
     #[regex(r"\.[A-Za-z_]\w*", |lx| lx.slice()[1..].to_string())]
@@ -54,6 +53,50 @@ pub enum Token {
     /// A comment, which starts with a semicolon and spans the remaining part of the line.
     #[regex(r";.*")]
     Comment
+}
+
+macro_rules! ident_enum {
+    ($($instr:ident),+) => {
+        /// An identifier. This can refer to either:
+        /// - a label (e.g., `IF`, `WHILE`, `ENDIF`, `IF1`)
+        /// - an instruction (e.g. `ADD`, `AND`, `NOT`)
+        ///
+        /// This token type is case insensitive. 
+        #[derive(Debug, PartialEq, Eq, Clone)]
+        pub enum Ident {
+            $(
+                #[allow(missing_docs)]
+                $instr
+            ),+,
+            #[allow(missing_docs)]
+            Label(String)
+        }
+
+        impl std::str::FromStr for Ident {
+            type Err = std::convert::Infallible;
+        
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                match s {
+                    $(stringify!($instr) => Ok(Self::$instr)),*,
+                    s => Ok(Self::Label(s.to_string()))
+                }
+            }
+        }
+
+        impl std::fmt::Display for Ident {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    $(Self::$instr => f.write_str(stringify!($instr))),*,
+                    Self::Label(id) => f.write_str(id)
+                }
+            }
+        }
+    };
+}
+ident_enum! {
+    ADD, AND, NOT, BR, BRP, BRZ, BRZP, BRN, BRNP, BRNZ, BRNZP, 
+    JMP, JSR, JSRR, LD, LDI, LDR, LEA, ST, STI, STR, TRAP, NOP, 
+    RET, RTI, GETC, OUT, PUTC, PUTS, IN, PUTSP, HALT
 }
 
 /// Any errors raised in attempting to lex an input stream.

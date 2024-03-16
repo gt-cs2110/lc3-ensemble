@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use logos::Span;
 
 use crate::ast::{CondCode, IOffset, ImmOrReg, Offset, PCOffset, Reg, TrapVect8};
-use crate::lexer::Token;
+use crate::lexer::{Ident, Token};
 
 type PCOffset9 = PCOffset<i16, 9>;
 type PCOffset11 = PCOffset<i16, 11>;
@@ -183,7 +183,7 @@ impl<OFF, const N: u32> Parse for PCOffset<OFF, N>
         match parser.parse() {
             Ok(off) => Ok(PCOffset::Offset(off)),
             Err(_) => parser.match_(|t| match t {
-                Token::Ident(s) => Ok(PCOffset::Label(s.to_string())),
+                Token::Ident(Ident::Label(s)) => Ok(PCOffset::Label(s.to_string())),
                 _ => Err(ParseErr::new("expected offset or label"))
             }),
         }
@@ -199,20 +199,14 @@ fn parse_comma(t: &Token) -> Result<(), ParseErr> {
 
 impl Parse for Instruction {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
-        let mut opcode = parser.match_(|t| match t {
-            Token::Unsigned(_)  => Err(ParseErr::new("unexpected numeric")),
-            Token::Signed(_)    => Err(ParseErr::new("unexpected numeric")),
-            Token::Reg(_)       => Err(ParseErr::new("unexpected register")),
-            Token::Ident(id)    => Ok(id.to_string()),
-            Token::Directive(_) => Err(ParseErr::new("unexpected directive")),
-            Token::String(_)    => Err(ParseErr::new("unexpected string literal")),
-            Token::Colon        => Err(ParseErr::new("unexpected colon")),
-            Token::Comma        => Err(ParseErr::new("unexpected comma")),
-            Token::Comment      => Err(ParseErr::new("unexpected comment")), // FIXME
+        let opcode = parser.match_(|t| match t {
+            Token::Ident(Ident::Label(_)) => Err(ParseErr::new("expected instruction")),
+            Token::Ident(id) => Ok(id.clone()),
+            _ => Err(ParseErr::new("expected instruction"))
         })?;
 
-        match &*opcode.to_uppercase() {
-            "ADD" => {
+        match opcode {
+            Ident::ADD => {
                 let dr = parser.parse()?;
                 parser.match_(parse_comma)?;
                 let sr1 = parser.parse()?;
@@ -221,7 +215,7 @@ impl Parse for Instruction {
 
                 Ok(Self::Add(dr, sr1, sr2))
             },
-            "AND" => {
+            Ident::AND => {
                 let dr = parser.parse()?;
                 parser.match_(parse_comma)?;
                 let sr1 = parser.parse()?;
@@ -230,39 +224,39 @@ impl Parse for Instruction {
 
                 Ok(Self::And(dr, sr1, sr2))
             },
-            "NOT" => {
+            Ident::NOT => {
                 let dr = parser.parse()?;
                 parser.match_(parse_comma)?;
                 let sr = parser.parse()?;
 
                 Ok(Self::Not(dr, sr))
             },
-            "BR" => Ok(Self::Br(0b111, parser.parse()?)),
-            "BRP" => Ok(Self::Br(0b001, parser.parse()?)),
-            "BRZ" => Ok(Self::Br(0b010, parser.parse()?)),
-            "BRZP" => Ok(Self::Br(0b011, parser.parse()?)),
-            "BRN" => Ok(Self::Br(0b100, parser.parse()?)),
-            "BRNP" => Ok(Self::Br(0b101, parser.parse()?)),
-            "BRNZ" => Ok(Self::Br(0b110, parser.parse()?)),
-            "BRNZP" => Ok(Self::Br(0b111, parser.parse()?)),
-            "JMP" => Ok(Self::Jmp(parser.parse()?)),
-            "JSR" => Ok(Self::Jsr(parser.parse()?)),
-            "JSRR" => Ok(Self::Jsrr(parser.parse()?)),
-            "LD" => {
+            Ident::BR => Ok(Self::Br(0b111, parser.parse()?)),
+            Ident::BRP => Ok(Self::Br(0b001, parser.parse()?)),
+            Ident::BRZ => Ok(Self::Br(0b010, parser.parse()?)),
+            Ident::BRZP => Ok(Self::Br(0b011, parser.parse()?)),
+            Ident::BRN => Ok(Self::Br(0b100, parser.parse()?)),
+            Ident::BRNP => Ok(Self::Br(0b101, parser.parse()?)),
+            Ident::BRNZ => Ok(Self::Br(0b110, parser.parse()?)),
+            Ident::BRNZP => Ok(Self::Br(0b111, parser.parse()?)),
+            Ident::JMP => Ok(Self::Jmp(parser.parse()?)),
+            Ident::JSR => Ok(Self::Jsr(parser.parse()?)),
+            Ident::JSRR => Ok(Self::Jsrr(parser.parse()?)),
+            Ident::LD => {
                 let dr = parser.parse()?;
                 parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
                 Ok(Self::Ld(dr, off))
             },
-            "LDI" => {
+            Ident::LDI => {
                 let dr = parser.parse()?;
                 parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
                 Ok(Self::Ldi(dr, off))
             },
-            "LDR" => {
+            Ident::LDR => {
                 let dr = parser.parse()?;
                 parser.match_(parse_comma)?;
                 let br = parser.parse()?;
@@ -271,28 +265,28 @@ impl Parse for Instruction {
 
                 Ok(Self::Ldr(dr, br, off))
             },
-            "LEA" => {
+            Ident::LEA => {
                 let dr = parser.parse()?;
                 parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
                 Ok(Self::Lea(dr, off))
             },
-            "ST" => {
+            Ident::ST => {
                 let sr = parser.parse()?;
                 parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
                 Ok(Self::St(sr, off))
             },
-            "STI" => {
+            Ident::STI => {
                 let sr = parser.parse()?;
                 parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
                 Ok(Self::Sti(sr, off))
             },
-            "STR" => {
+            Ident::STR => {
                 let dr = parser.parse()?;
                 parser.match_(parse_comma)?;
                 let br = parser.parse()?;
@@ -301,18 +295,18 @@ impl Parse for Instruction {
 
                 Ok(Self::Str(dr, br, off))
             },
-            "TRAP" => Ok(Self::Trap(parser.parse()?)),
-            "NOP" => Ok(Self::Nop),
-            "RET" => Ok(Self::Ret),
-            "RTI" => Ok(Self::Rti),
-            "GETC" => Ok(Self::Getc),
-            "OUT" => Ok(Self::Out),
-            "PUTC" => Ok(Self::Putc),
-            "PUTS" => Ok(Self::Puts),
-            "IN" => Ok(Self::In),
-            "PUTSP" => Ok(Self::Putsp),
-            "HALT" => Ok(Self::Halt),
-            _ => Err(ParseErr::new("invalid instruction"))
+            Ident::TRAP => Ok(Self::Trap(parser.parse()?)),
+            Ident::NOP => Ok(Self::Nop),
+            Ident::RET => Ok(Self::Ret),
+            Ident::RTI => Ok(Self::Rti),
+            Ident::GETC => Ok(Self::Getc),
+            Ident::OUT => Ok(Self::Out),
+            Ident::PUTC => Ok(Self::Putc),
+            Ident::PUTS => Ok(Self::Puts),
+            Ident::IN => Ok(Self::In),
+            Ident::PUTSP => Ok(Self::Putsp),
+            Ident::HALT => Ok(Self::Halt),
+            Ident::Label(_) => Err(ParseErr::new("expected instruction")) // should be unreachable
         }
     }
 }
