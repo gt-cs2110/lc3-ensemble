@@ -30,162 +30,162 @@ const OP_TRAP: u16 = 0b1111;
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum SimInstr {
     #[allow(missing_docs)]
-    Br(CondCode, IOffset<9>),
+    BR(CondCode, IOffset<9>),
     #[allow(missing_docs)]
-    Add(Reg, Reg, ImmOrReg<5>),
+    ADD(Reg, Reg, ImmOrReg<5>),
     #[allow(missing_docs)]
-    Ld(Reg, IOffset<9>),
+    LD(Reg, IOffset<9>),
     #[allow(missing_docs)]
-    St(Reg, IOffset<9>),
+    ST(Reg, IOffset<9>),
     #[allow(missing_docs)]
-    Jsr(ImmOrReg<11>),
+    JSR(ImmOrReg<11>),
     #[allow(missing_docs)]
-    And(Reg, Reg, ImmOrReg<5>),
+    AND(Reg, Reg, ImmOrReg<5>),
     #[allow(missing_docs)]
-    Ldr(Reg, Reg, IOffset<6>),
+    LDR(Reg, Reg, IOffset<6>),
     #[allow(missing_docs)]
-    Str(Reg, Reg, IOffset<6>),
+    STR(Reg, Reg, IOffset<6>),
     #[allow(missing_docs)]
-    Rti,
+    RTI,
     #[allow(missing_docs)]
-    Not(Reg, Reg),
+    NOT(Reg, Reg),
     #[allow(missing_docs)]
-    Ldi(Reg, IOffset<9>),
+    LDI(Reg, IOffset<9>),
     #[allow(missing_docs)]
-    Sti(Reg, IOffset<9>),
+    STI(Reg, IOffset<9>),
     #[allow(missing_docs)]
-    Jmp(Reg),
+    JMP(Reg),
     // Reserved,
     #[allow(missing_docs)]
-    Lea(Reg, IOffset<9>),
+    LEA(Reg, IOffset<9>),
     #[allow(missing_docs)]
-    Trap(TrapVect8),
+    TRAP(TrapVect8),
 }
 
 impl SimInstr {
     /// Gets the opcode for the given instruction. This is always 4 bits.
     pub fn opcode(&self) -> u16 {
         match self {
-            SimInstr::Br(_, _) => OP_BR,
-            SimInstr::Add(_, _, _) => OP_ADD,
-            SimInstr::Ld(_, _) => OP_LD,
-            SimInstr::St(_, _) => OP_ST,
-            SimInstr::Jsr(_) => OP_JSR,
-            SimInstr::And(_, _, _) => OP_AND,
-            SimInstr::Ldr(_, _, _) => OP_LDR,
-            SimInstr::Str(_, _, _) => OP_STR,
-            SimInstr::Rti => OP_RTI,
-            SimInstr::Not(_, _) => OP_NOT,
-            SimInstr::Ldi(_, _) => OP_LDI,
-            SimInstr::Sti(_, _) => OP_STI,
-            SimInstr::Jmp(_) => OP_JMP,
+            SimInstr::BR(_, _) => OP_BR,
+            SimInstr::ADD(_, _, _) => OP_ADD,
+            SimInstr::LD(_, _) => OP_LD,
+            SimInstr::ST(_, _) => OP_ST,
+            SimInstr::JSR(_) => OP_JSR,
+            SimInstr::AND(_, _, _) => OP_AND,
+            SimInstr::LDR(_, _, _) => OP_LDR,
+            SimInstr::STR(_, _, _) => OP_STR,
+            SimInstr::RTI => OP_RTI,
+            SimInstr::NOT(_, _) => OP_NOT,
+            SimInstr::LDI(_, _) => OP_LDI,
+            SimInstr::STI(_, _) => OP_STI,
+            SimInstr::JMP(_) => OP_JMP,
             // reserved => 0b1101
-            SimInstr::Lea(_, _) => OP_LEA,
-            SimInstr::Trap(_) => OP_TRAP,
+            SimInstr::LEA(_, _) => OP_LEA,
+            SimInstr::TRAP(_) => OP_TRAP,
         }
     }
 
     /// Encodes this instruction as 16-bit bytecode.
     pub fn encode(&self) -> u16 {
         match self {
-            SimInstr::Br(cc, off) => join_bits([
+            SimInstr::BR(cc, off) => join_bits([
                 (self.opcode(),    12..16),
                 (*cc as u16,       9..12),
                 (off.get() as u16, 0..9)
             ]),
-            SimInstr::Add(dr, sr1, ImmOrReg::Imm(i2)) => join_bits([ // ADD DR, SR1, imm5
+            SimInstr::ADD(dr, sr1, ImmOrReg::Imm(i2)) => join_bits([ // ADD DR, SR1, imm5
                 (self.opcode(),   12..16),
                 (dr.0 as u16,     9..12),
                 (sr1.0 as u16,    6..9),
                 (0b1,             5..6),
                 (i2.get() as u16, 0..5)
             ]),
-            SimInstr::Add(dr, sr1, ImmOrReg::Reg(r2)) => join_bits([ // ADD DR, SR1, SR2
+            SimInstr::ADD(dr, sr1, ImmOrReg::Reg(r2)) => join_bits([ // ADD DR, SR1, SR2
                 (self.opcode(), 12..16),
                 (dr.0 as u16,   9..12),
                 (sr1.0 as u16,  6..9),
                 (0b000,         3..6),
                 (r2.0 as u16,   0..3)
             ]),
-            SimInstr::Ld(dr, off) => join_bits([
+            SimInstr::LD(dr, off) => join_bits([
                 (self.opcode(),    12..16),
                 (dr.0 as u16,      9..12),
                 (off.get() as u16, 0..9)
             ]),
-            SimInstr::St(sr, off) => join_bits([
+            SimInstr::ST(sr, off) => join_bits([
                 (self.opcode(),    12..16),
                 (sr.0 as u16,      9..12),
                 (off.get() as u16, 0..9)
             ]),
-            SimInstr::Jsr(ImmOrReg::Imm(off)) => join_bits([ // JSR
+            SimInstr::JSR(ImmOrReg::Imm(off)) => join_bits([ // JSR
                 (self.opcode(),    12..16),
                 (0b1,              11..12),
                 (off.get() as u16, 0..11)
             ]),
-            SimInstr::Jsr(ImmOrReg::Reg(br)) => join_bits([ // JSRR
+            SimInstr::JSR(ImmOrReg::Reg(br)) => join_bits([ // JSRR
                 (self.opcode(), 12..16),
                 (0b000,         9..12),
                 (br.0 as u16,   6..9),
                 (0b000_000,     0..6)
             ]),
-            SimInstr::And(dr, sr1, ImmOrReg::Imm(i2)) => join_bits([ // AND DR, SR1, imm5
+            SimInstr::AND(dr, sr1, ImmOrReg::Imm(i2)) => join_bits([ // AND DR, SR1, imm5
                 (self.opcode(),   12..16),
                 (dr.0 as u16,     9..12),
                 (sr1.0 as u16,    6..9),
                 (0b1,             5..6),
                 (i2.get() as u16, 0..5)
             ]),
-            SimInstr::And(dr, sr1, ImmOrReg::Reg(r2)) => join_bits([ // AND DR, SR1, SR2
+            SimInstr::AND(dr, sr1, ImmOrReg::Reg(r2)) => join_bits([ // AND DR, SR1, SR2
                 (self.opcode(), 12..16),
                 (dr.0 as u16,   9..12),
                 (sr1.0 as u16,  6..9),
                 (0b000,         3..6),
                 (r2.0 as u16,   0..3)
             ]),
-            SimInstr::Ldr(dr, br, off) => join_bits([
+            SimInstr::LDR(dr, br, off) => join_bits([
                 (self.opcode(),    12..16),
                 (dr.0 as u16,      9..12),
                 (br.0 as u16,      6..9),
                 (off.get() as u16, 0..6)
             ]),
-            SimInstr::Str(dr, br, off) => join_bits([
+            SimInstr::STR(dr, br, off) => join_bits([
                 (self.opcode(),    12..16),
                 (dr.0 as u16,      9..12),
                 (br.0 as u16,      6..9),
                 (off.get() as u16, 0..6)
             ]),
-            SimInstr::Rti => join_bits([
+            SimInstr::RTI => join_bits([
                 (self.opcode(),    12..16),
                 (0b0000_0000_0000, 0..12)
             ]),
-            SimInstr::Not(dr, sr) => join_bits([
+            SimInstr::NOT(dr, sr) => join_bits([
                 (self.opcode(), 12..16),
                 (dr.0 as u16,   9..12),
                 (sr.0 as u16,   6..9),
                 (0b111_111,     0..6)
             ]),
-            SimInstr::Ldi(dr, off) => join_bits([
+            SimInstr::LDI(dr, off) => join_bits([
                 (self.opcode(),    12..16),
                 (dr.0 as u16,      9..12),
                 (off.get() as u16, 0..9)
             ]),
-            SimInstr::Sti(sr, off) => join_bits([
+            SimInstr::STI(sr, off) => join_bits([
                 (self.opcode(),    12..16),
                 (sr.0 as u16,      9..12),
                 (off.get() as u16, 0..9)
             ]),
-            SimInstr::Jmp(br) => join_bits([
+            SimInstr::JMP(br) => join_bits([
                 (self.opcode(), 12..16),
                 (0b000,         9..12),
                 (br.0 as u16,   6..9),
                 (0b000_000,     0..6)
             ]),
-            SimInstr::Lea(dr, off) => join_bits([
+            SimInstr::LEA(dr, off) => join_bits([
                 (self.opcode(),    12..16),
                 (dr.0 as u16,      9..12),
                 (off.get() as u16, 0..9)
             ]),
-            SimInstr::Trap(vect) => join_bits([
+            SimInstr::TRAP(vect) => join_bits([
                 (self.opcode(), 12..16),
                 (0b0000,        8..12),
                 (vect.get(),    0..8)
@@ -201,7 +201,7 @@ impl SimInstr {
             OP_BR => {
                 let cc = get_bits(operands, 9..12) as u8;
                 let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
-                Self::Br(cc, off)
+                Self::BR(cc, off)
             },
             OP_ADD => {
                 let dr = Reg(get_bits(operands, 9..12) as u8);
@@ -214,19 +214,19 @@ impl SimInstr {
                     true  => ImmOrReg::Imm(IOffset::new_trunc(get_bits(operands, 0..5) as i16)),
                 };
 
-                Self::Add(dr, sr1, sr2)
+                Self::ADD(dr, sr1, sr2)
             },
             OP_LD => {
                 let dr = Reg(get_bits(operands, 9..12) as u8);
                 let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
 
-                Self::Ld(dr, off)
+                Self::LD(dr, off)
             }
             OP_ST => {
                 let sr = Reg(get_bits(operands, 9..12) as u8);
                 let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
 
-                Self::St(sr, off)
+                Self::ST(sr, off)
             },
             OP_JSR => {
                 let val = match get_bits(operands, 11..12) != 0 {
@@ -238,7 +238,7 @@ impl SimInstr {
                     },
                 };
 
-                Self::Jsr(val)
+                Self::JSR(val)
             },
             OP_AND => {
                 let dr = Reg(get_bits(operands, 9..12) as u8);
@@ -251,62 +251,62 @@ impl SimInstr {
                     true  => ImmOrReg::Imm(IOffset::new_trunc(get_bits(operands, 0..5) as i16)),
                 };
 
-                Self::And(dr, sr1, sr2)
+                Self::AND(dr, sr1, sr2)
             },
             OP_LDR => {
                 let dr = Reg(get_bits(operands, 9..12) as u8);
                 let br = Reg(get_bits(operands, 6..9) as u8);
                 let off = IOffset::new_trunc(get_bits(operands, 0..6) as i16);
 
-                Self::Ldr(dr, br, off)
+                Self::LDR(dr, br, off)
             },
             OP_STR => {
                 let sr = Reg(get_bits(operands, 9..12) as u8);
                 let br = Reg(get_bits(operands, 6..9) as u8);
                 let off = IOffset::new_trunc(get_bits(operands, 0..6) as i16);
 
-                Self::Str(sr, br, off)
+                Self::STR(sr, br, off)
             },
             OP_RTI => {
                 assert_eq!(get_bits(operands, 0..12), 0b0000_0000_0000, "invalid instruction format"); // TODO: replace panic
-                Self::Rti
+                Self::RTI
             },
             OP_NOT => {
                 let dr = Reg(get_bits(operands, 9..12) as u8);
                 let sr = Reg(get_bits(operands, 6..9) as u8);
                 assert_eq!(get_bits(operands, 0..6), 0b111111, "invalid instruction format"); // TODO: replace panic
 
-                Self::Not(dr, sr)
+                Self::NOT(dr, sr)
             },
             OP_LDI => {
                 let dr = Reg(get_bits(operands, 9..12) as u8);
                 let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
 
-                Self::Ldi(dr, off)
+                Self::LDI(dr, off)
             },
             OP_STI => {
                 let sr = Reg(get_bits(operands, 9..12) as u8);
                 let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
 
-                Self::Sti(sr, off)
+                Self::STI(sr, off)
             },
             OP_JMP => {
                 assert_eq!(get_bits(operands, 9..12), 0b000, "invalid instruction format"); // TODO: replace panic
                 let reg = Reg(get_bits(operands, 6..9) as u8);
                 assert_eq!(get_bits(operands, 0..6), 0b000_000, "invalid instruction format"); // TODO: replace panic
                 
-                Self::Jmp(reg)
+                Self::JMP(reg)
             },
             OP_LEA => {
                 let dr = Reg(get_bits(operands, 9..12) as u8);
                 let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
 
-                Self::Lea(dr, off)
+                Self::LEA(dr, off)
             },
             OP_TRAP => {
                 assert_eq!(get_bits(operands, 8..12), 0b0000, "invalid instruction format"); // TODO: replace panic
                 let vect = TrapVect8::new_trunc(get_bits(operands, 0..8));
-                Self::Trap(vect)
+                Self::TRAP(vect)
             },
             _ => panic!("invalid opcode") // TODO: replace panic
         }

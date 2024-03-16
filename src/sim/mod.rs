@@ -59,12 +59,12 @@ impl Simulator {
         self.pc += 1;
 
         match instr {
-            SimInstr::Br(cc, off)  => {
+            SimInstr::BR(cc, off)  => {
                 if cc & self.cc != 0 {
                     self.pc = self.pc.wrapping_add_signed(off.get());
                 }
             },
-            SimInstr::Add(dr, sr1, sr2) => {
+            SimInstr::ADD(dr, sr1, sr2) => {
                 let val1 = self.access_reg(sr1).get_unsigned();
                 let val2 = match sr2 {
                     crate::ast::ImmOrReg::Imm(i2) => i2.get(),
@@ -75,20 +75,20 @@ impl Simulator {
                 self.access_reg(dr).set(result);
                 self.set_cc(result);
             },
-            SimInstr::Ld(dr, off) => {
+            SimInstr::LD(dr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
 
                 let val = self.access_mem(ea).get_unsigned();
                 self.access_reg(dr).set(val);
                 self.set_cc(val);
             },
-            SimInstr::St(sr, off) => {
+            SimInstr::ST(sr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
 
                 let val = self.access_reg(sr).get_unsigned();
                 self.access_mem(ea).set(val);
             },
-            SimInstr::Jsr(op) => {
+            SimInstr::JSR(op) => {
                 let off = match op {
                     crate::ast::ImmOrReg::Imm(off) => off.get(),
                     crate::ast::ImmOrReg::Reg(br)  => self.access_reg(br).get_signed(),
@@ -98,7 +98,7 @@ impl Simulator {
                 self.pc = self.pc.wrapping_add_signed(off);
                 self.sr_entered += 1;
             },
-            SimInstr::And(dr, sr1, sr2) => {
+            SimInstr::AND(dr, sr1, sr2) => {
                 let val1 = self.access_reg(sr1).get_unsigned();
                 let val2 = match sr2 {
                     crate::ast::ImmOrReg::Imm(i2) => i2.get() as u16,
@@ -109,41 +109,41 @@ impl Simulator {
                 self.access_reg(dr).set(result);
                 self.set_cc(result);
             },
-            SimInstr::Ldr(dr, br, off) => {
+            SimInstr::LDR(dr, br, off) => {
                 let ea = self.access_reg(br).get_unsigned().wrapping_add_signed(off.get());
 
                 let val = self.access_mem(ea).get_unsigned();
                 self.access_reg(dr).set(val);
                 self.set_cc(val);
             },
-            SimInstr::Str(sr, br, off) => {
+            SimInstr::STR(sr, br, off) => {
                 let ea = self.access_reg(br).get_unsigned().wrapping_add_signed(off.get());
                 
                 let val = self.access_reg(sr).get_unsigned();
                 self.access_mem(ea).set(val);
             },
-            SimInstr::Rti => todo!("rti not yet implemented"),
-            SimInstr::Not(dr, sr) => {
+            SimInstr::RTI => todo!("rti not yet implemented"),
+            SimInstr::NOT(dr, sr) => {
                 let val1 = self.access_reg(sr).get_unsigned();
                 
                 let result = !val1;
                 self.access_reg(dr).set(result);
                 self.set_cc(result);
             },
-            SimInstr::Ldi(dr, off) => {
+            SimInstr::LDI(dr, off) => {
                 let ea = self.access_mem(self.pc.wrapping_add_signed(off.get())).get_unsigned();
 
                 let val = self.access_mem(ea).get_unsigned();
                 self.access_reg(dr).set(val);
                 self.set_cc(val);
             },
-            SimInstr::Sti(sr, off) => {
+            SimInstr::STI(sr, off) => {
                 let ea = self.access_mem(self.pc.wrapping_add_signed(off.get())).get_unsigned();
 
                 let val = self.access_reg(sr).get_unsigned();
                 self.access_mem(ea).set(val);
             },
-            SimInstr::Jmp(br) => {
+            SimInstr::JMP(br) => {
                 let off = self.access_reg(br).get_signed();
                 self.pc = self.pc.wrapping_add_signed(off);
 
@@ -152,11 +152,11 @@ impl Simulator {
                     self.sr_entered = self.sr_entered.saturating_sub(1);
                 }
             },
-            SimInstr::Lea(dr, off) => {
+            SimInstr::LEA(dr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
                 self.access_reg(dr).set(ea);
             },
-            SimInstr::Trap(vect) => {
+            SimInstr::TRAP(vect) => {
                 self.pc = self.access_mem(vect.get()).get_unsigned();
                 self.sr_entered += 1;
             },

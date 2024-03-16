@@ -12,69 +12,69 @@ type PCOffset9 = PCOffset<i16, 9>;
 type PCOffset11 = PCOffset<i16, 11>;
 
 enum Instruction {
-    Add(Reg, Reg, ImmOrReg<5>),
-    And(Reg, Reg, ImmOrReg<5>),
-    Not(Reg, Reg),
-    Br(CondCode, PCOffset9),
-    Jmp(Reg),
-    Jsr(PCOffset11),
-    Jsrr(Reg),
-    Ld(Reg, PCOffset9),
-    Ldi(Reg, PCOffset9),
-    Ldr(Reg, Reg, IOffset<6>),
-    Lea(Reg, PCOffset9),
-    St(Reg, PCOffset9),
-    Sti(Reg, PCOffset9),
-    Str(Reg, Reg, IOffset<6>),
-    Trap(TrapVect8),
+    ADD(Reg, Reg, ImmOrReg<5>),
+    AND(Reg, Reg, ImmOrReg<5>),
+    NOT(Reg, Reg),
+    BR(CondCode, PCOffset9),
+    JMP(Reg),
+    JSR(PCOffset11),
+    JSRR(Reg),
+    LD(Reg, PCOffset9),
+    LDI(Reg, PCOffset9),
+    LDR(Reg, Reg, IOffset<6>),
+    LEA(Reg, PCOffset9),
+    ST(Reg, PCOffset9),
+    STI(Reg, PCOffset9),
+    STR(Reg, Reg, IOffset<6>),
+    TRAP(TrapVect8),
 
     // Extra instructions
-    Nop,
-    Ret,
-    Rti,
-    Getc,
-    Out,
-    Putc,
-    Puts,
-    In,
-    Putsp,
-    Halt
+    NOP,
+    RET,
+    RTI,
+    GETC,
+    OUT,
+    PUTC,
+    PUTS,
+    IN,
+    PUTSP,
+    HALT
 }
 
 impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Instruction::Add(dr, sr1, sr2) => write!(f, "ADD {dr}, {sr1}, {sr2}"),
-            Instruction::And(dr, sr1, sr2) => write!(f, "AND {dr}, {sr1}, {sr2}"),
-            Instruction::Not(dr, sr) => write!(f, "NOT {dr}, {sr}"),
-            Instruction::Br(cc, off) => {
+            Instruction::ADD(dr, sr1, sr2) => write!(f, "ADD {dr}, {sr1}, {sr2}"),
+            Instruction::AND(dr, sr1, sr2) => write!(f, "AND {dr}, {sr1}, {sr2}"),
+            Instruction::NOT(dr, sr) => write!(f, "NOT {dr}, {sr}"),
+            Instruction::BR(cc, off) => {
                 write!(f, "BR")?;
                 if cc & 0b100 != 0 { write!(f, "n")?; };
                 if cc & 0b010 != 0 { write!(f, "z")?; };
                 if cc & 0b001 != 0 { write!(f, "p")?; };
                 write!(f, ", {off}")
             },
-            Instruction::Jmp(br) => write!(f, "JMP {br}"),
-            Instruction::Jsr(off) => write!(f, "JSR {off}"),
-            Instruction::Jsrr(br) => write!(f, "JSRR {br}"),
-            Instruction::Ld(dr, off) => write!(f, "LD {dr}, {off}"),
-            Instruction::Ldi(dr, off) => write!(f, "LDI {dr}, {off}"),
-            Instruction::Ldr(dr, br, off) => write!(f, "LDR {dr}, {br}, {off}"),
-            Instruction::Lea(dr, off) => write!(f, "LEA {dr}, {off}"),
-            Instruction::St(sr, off) => write!(f, "ST {sr}, {off}"),
-            Instruction::Sti(sr, off) => write!(f, "STI {sr}, {off}"),
-            Instruction::Str(sr, br, off) => write!(f, "STR {sr}, {br}, {off}"),
-            Instruction::Trap(vect) => write!(f, "TRAP {vect:02X}"),
-            Instruction::Nop   => f.write_str("NOP"),
-            Instruction::Ret   => f.write_str("RET"),
-            Instruction::Rti   => f.write_str("RTI"),
-            Instruction::Getc  => f.write_str("GETC"),
-            Instruction::Out   => f.write_str("OUT"),
-            Instruction::Putc  => f.write_str("PUTC"),
-            Instruction::Puts  => f.write_str("PUTS"),
-            Instruction::In    => f.write_str("IN"),
-            Instruction::Putsp => f.write_str("PUTSP"),
-            Instruction::Halt  => f.write_str("HALT"),
+            Instruction::JMP(br) => write!(f, "JMP {br}"),
+            Instruction::JSR(off) => write!(f, "JSR {off}"),
+            Instruction::JSRR(br) => write!(f, "JSRR {br}"),
+            Instruction::LD(dr, off) => write!(f, "LD {dr}, {off}"),
+            Instruction::LDI(dr, off) => write!(f, "LDI {dr}, {off}"),
+            Instruction::LDR(dr, br, off) => write!(f, "LDR {dr}, {br}, {off}"),
+            Instruction::LEA(dr, off) => write!(f, "LEA {dr}, {off}"),
+            Instruction::ST(sr, off) => write!(f, "ST {sr}, {off}"),
+            Instruction::STI(sr, off) => write!(f, "STI {sr}, {off}"),
+            Instruction::STR(sr, br, off) => write!(f, "STR {sr}, {br}, {off}"),
+            Instruction::TRAP(vect) => write!(f, "TRAP {vect:02X}"),
+            Instruction::NOP   => f.write_str("NOP"),
+            Instruction::RET   => f.write_str("RET"),
+            Instruction::RTI   => f.write_str("RTI"),
+            Instruction::GETC  => f.write_str("GETC"),
+            Instruction::OUT   => f.write_str("OUT"),
+            Instruction::PUTC  => f.write_str("PUTC"),
+            Instruction::PUTS  => f.write_str("PUTS"),
+            Instruction::IN    => f.write_str("IN"),
+            Instruction::PUTSP => f.write_str("PUTSP"),
+            Instruction::HALT  => f.write_str("HALT"),
         }
     }
 }
@@ -216,7 +216,7 @@ impl Parse for Instruction {
                 parser.match_(parse_comma)?;
                 let sr2 = parser.parse()?;
 
-                Ok(Self::Add(dr, sr1, sr2))
+                Ok(Self::ADD(dr, sr1, sr2))
             },
             Ident::AND => {
                 let dr = parser.parse()?;
@@ -225,39 +225,39 @@ impl Parse for Instruction {
                 parser.match_(parse_comma)?;
                 let sr2 = parser.parse()?;
 
-                Ok(Self::And(dr, sr1, sr2))
+                Ok(Self::AND(dr, sr1, sr2))
             },
             Ident::NOT => {
                 let dr = parser.parse()?;
                 parser.match_(parse_comma)?;
                 let sr = parser.parse()?;
 
-                Ok(Self::Not(dr, sr))
+                Ok(Self::NOT(dr, sr))
             },
-            Ident::BR => Ok(Self::Br(0b111, parser.parse()?)),
-            Ident::BRP => Ok(Self::Br(0b001, parser.parse()?)),
-            Ident::BRZ => Ok(Self::Br(0b010, parser.parse()?)),
-            Ident::BRZP => Ok(Self::Br(0b011, parser.parse()?)),
-            Ident::BRN => Ok(Self::Br(0b100, parser.parse()?)),
-            Ident::BRNP => Ok(Self::Br(0b101, parser.parse()?)),
-            Ident::BRNZ => Ok(Self::Br(0b110, parser.parse()?)),
-            Ident::BRNZP => Ok(Self::Br(0b111, parser.parse()?)),
-            Ident::JMP => Ok(Self::Jmp(parser.parse()?)),
-            Ident::JSR => Ok(Self::Jsr(parser.parse()?)),
-            Ident::JSRR => Ok(Self::Jsrr(parser.parse()?)),
+            Ident::BR => Ok(Self::BR(0b111, parser.parse()?)),
+            Ident::BRP => Ok(Self::BR(0b001, parser.parse()?)),
+            Ident::BRZ => Ok(Self::BR(0b010, parser.parse()?)),
+            Ident::BRZP => Ok(Self::BR(0b011, parser.parse()?)),
+            Ident::BRN => Ok(Self::BR(0b100, parser.parse()?)),
+            Ident::BRNP => Ok(Self::BR(0b101, parser.parse()?)),
+            Ident::BRNZ => Ok(Self::BR(0b110, parser.parse()?)),
+            Ident::BRNZP => Ok(Self::BR(0b111, parser.parse()?)),
+            Ident::JMP => Ok(Self::JMP(parser.parse()?)),
+            Ident::JSR => Ok(Self::JSR(parser.parse()?)),
+            Ident::JSRR => Ok(Self::JSRR(parser.parse()?)),
             Ident::LD => {
                 let dr = parser.parse()?;
                 parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
-                Ok(Self::Ld(dr, off))
+                Ok(Self::LD(dr, off))
             },
             Ident::LDI => {
                 let dr = parser.parse()?;
                 parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
-                Ok(Self::Ldi(dr, off))
+                Ok(Self::LDI(dr, off))
             },
             Ident::LDR => {
                 let dr = parser.parse()?;
@@ -266,28 +266,28 @@ impl Parse for Instruction {
                 parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
-                Ok(Self::Ldr(dr, br, off))
+                Ok(Self::LDR(dr, br, off))
             },
             Ident::LEA => {
                 let dr = parser.parse()?;
                 parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
-                Ok(Self::Lea(dr, off))
+                Ok(Self::LEA(dr, off))
             },
             Ident::ST => {
                 let sr = parser.parse()?;
                 parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
-                Ok(Self::St(sr, off))
+                Ok(Self::ST(sr, off))
             },
             Ident::STI => {
                 let sr = parser.parse()?;
                 parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
-                Ok(Self::Sti(sr, off))
+                Ok(Self::STI(sr, off))
             },
             Ident::STR => {
                 let dr = parser.parse()?;
@@ -296,19 +296,19 @@ impl Parse for Instruction {
                 parser.match_(parse_comma)?;
                 let off = parser.parse()?;
 
-                Ok(Self::Str(dr, br, off))
+                Ok(Self::STR(dr, br, off))
             },
-            Ident::TRAP => Ok(Self::Trap(parser.parse()?)),
-            Ident::NOP => Ok(Self::Nop),
-            Ident::RET => Ok(Self::Ret),
-            Ident::RTI => Ok(Self::Rti),
-            Ident::GETC => Ok(Self::Getc),
-            Ident::OUT => Ok(Self::Out),
-            Ident::PUTC => Ok(Self::Putc),
-            Ident::PUTS => Ok(Self::Puts),
-            Ident::IN => Ok(Self::In),
-            Ident::PUTSP => Ok(Self::Putsp),
-            Ident::HALT => Ok(Self::Halt),
+            Ident::TRAP => Ok(Self::TRAP(parser.parse()?)),
+            Ident::NOP => Ok(Self::NOP),
+            Ident::RET => Ok(Self::RET),
+            Ident::RTI => Ok(Self::RTI),
+            Ident::GETC => Ok(Self::GETC),
+            Ident::OUT => Ok(Self::OUT),
+            Ident::PUTC => Ok(Self::PUTC),
+            Ident::PUTS => Ok(Self::PUTS),
+            Ident::IN => Ok(Self::IN),
+            Ident::PUTSP => Ok(Self::PUTSP),
+            Ident::HALT => Ok(Self::HALT),
             Ident::Label(_) => Err(ParseErr::new("expected instruction")) // should be unreachable
         }
     }
