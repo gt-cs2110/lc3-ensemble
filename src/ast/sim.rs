@@ -27,6 +27,7 @@ const OP_TRAP: u16 = 0b1111;
 /// 
 /// This erases all notions of aliases and labels.
 /// For instructions that map to typeable assembly code, refer to [todo_include_disp_instruction].
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum SimInstr {
     #[allow(missing_docs)]
     Br(CondCode, IOffset<9>),

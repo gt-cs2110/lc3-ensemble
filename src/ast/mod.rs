@@ -28,7 +28,7 @@ pub type TrapVect8 = Offset<u16, 8>;
 /// 
 /// This is used to handle the second operand `AND`/`ADD`, which
 /// can be either an immediate value or a register.
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum ImmOrReg<const N: u32> {
     #[allow(missing_docs)]
     Imm(IOffset<N>),
@@ -54,7 +54,7 @@ impl<const N: u32> std::fmt::Display for ImmOrReg<N> {
 /// `N` indicates the maximum bit size of this offset/immediate value.
 /// 
 /// For example, `Offset<i16, 5>` is used to represent `ADD`/`AND`'s imm5 operand.
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Offset<OFF, const N: u32>(OFF);
 
 impl<OFF: std::fmt::Display, const N: u32> std::fmt::Display for Offset<OFF, N> {
@@ -182,7 +182,7 @@ impl<OFF: OffsetBacking, const N: u32> Offset<OFF, N> {
 /// replaced with a regular [`Offset`] value.
 /// 
 /// [`Offset`]: Offset
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum PCOffset<OFF, const N: u32> {
     #[allow(missing_docs)]
     Offset(Offset<OFF, N>),
