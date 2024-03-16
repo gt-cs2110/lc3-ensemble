@@ -5,7 +5,7 @@ use std::borrow::Cow;
 
 use logos::Span;
 
-use crate::ast::asm::{Directive, AsmInstr};
+use crate::ast::asm::{AsmInstr, Directive, Stmt, StmtKind};
 use crate::ast::{ImmOrReg, Offset, PCOffset, Reg};
 use crate::lexer::{Ident, Token};
 
@@ -106,10 +106,10 @@ impl<OFF, const N: u32> Parse for PCOffset<OFF, N>
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
         match parser.parse() {
             Ok(off) => Ok(PCOffset::Offset(off)),
-            Err(_) => parser.match_(|t| match t {
-                Token::Ident(Ident::Label(s)) => Ok(PCOffset::Label(s.to_string())),
-                _ => Err(ParseErr::new("expected offset or label"))
-            }),
+            Err(_) => match parser.match_(parse_label) {
+                Ok(s) => Ok(PCOffset::Label(s)),
+                Err(_) => Err(ParseErr::new("expected offset or label")),
+            },
         }
     }
 }
@@ -120,12 +120,23 @@ fn parse_comma(t: &Token) -> Result<(), ParseErr> {
         _ => Err(ParseErr::new("expected comma"))
     }
 }
+fn parse_colon(t: &Token) -> Result<(), ParseErr> {
+    match t {
+        Token::Colon => Ok(()),
+        _ => Err(ParseErr::new("expected colon"))
+    }
+}
+fn parse_label(t: &Token) -> Result<String, ParseErr> {
+    match t {
+        Token::Ident(Ident::Label(s)) => Ok(s.to_string()),
+        _ => Err(ParseErr::new("expected offset or label"))
+    }
+}
 
 impl Parse for AsmInstr {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
         let opcode = parser.match_(|t| match t {
-            Token::Ident(Ident::Label(_)) => Err(ParseErr::new("expected instruction")),
-            Token::Ident(id) => Ok(id.clone()),
+            Token::Ident(id) if !matches!(id, Ident::Label(_)) => Ok(id.clone()),
             _ => Err(ParseErr::new("expected instruction"))
         })?;
 
@@ -292,5 +303,27 @@ impl Parse for Directive {
             "END" => Ok(Self::End),
             _ => Err(ParseErr::new("invalid directive"))
         }
+    }
+}
+
+impl Parse for StmtKind {
+    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+        match parser.peek() {
+            Some((Token::Directive(_), _)) => Ok(StmtKind::Directive(parser.parse()?)),
+            Some((Token::Ident(id), _)) if !matches!(id, Ident::Label(_)) => Ok(StmtKind::Instr(parser.parse()?)),
+            _ => Err(ParseErr::new("expected instruction or directive"))
+        }
+    }
+}
+impl Parse for Stmt {
+    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+        let mut labels = vec![];
+        while let Ok(label) = parser.match_(parse_label) {
+            let _ = parser.match_(parse_colon); // skip colon if it exists
+            labels.push(label);
+        }
+        let nucleus = parser.parse()?;
+
+        Ok(Self { labels, nucleus })
     }
 }

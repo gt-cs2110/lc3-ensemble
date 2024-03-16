@@ -417,11 +417,19 @@ impl std::fmt::Display for Directive {
         }
     }
 }
-enum StmtKind {
+
+/// Either an instruction or a directive.
+pub enum StmtKind {
+    #[allow(missing_docs)]
     Instr(AsmInstr),
+    #[allow(missing_docs)]
     Directive(Directive)
 }
-struct Stmt {
-    labels: Vec<String>,
-    nucleus: StmtKind
+
+/// An instruction or directive and the labels associated with them.
+pub struct Stmt {
+    /// The labels.
+    pub labels: Vec<String>,
+    /// The instruction or directive.
+    pub nucleus: StmtKind
 }
