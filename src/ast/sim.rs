@@ -1,4 +1,4 @@
-//! This module is used for holding simulation instructions,
+//! This module is used for holding simulation instructions ([`SimInstr`]),
 //! which are instructions that directly map to bytecode
 //! (as opposed to [todo_include_disp_instruction]) which
 //! map to assembly code.
@@ -233,7 +233,7 @@ impl SimInstr {
                     true  => ImmOrReg::Imm(IOffset::new_trunc(get_bits(operands, 0..11) as i16)),
                     false => {
                         assert_eq!(get_bits(operands, 9..11), 0b00, "invalid instruction format"); // TODO: replace panic
-                        assert_eq!(get_bits(operands, 0..6), 0b000000, "invalid instruction format"); // TODO: replace panic
+                        assert_eq!(get_bits(operands, 0..6), 0b000_000, "invalid instruction format"); // TODO: replace panic
                         ImmOrReg::Reg(Reg(get_bits(operands, 6..9) as u8))
                     },
                 };
@@ -268,7 +268,7 @@ impl SimInstr {
                 Self::Str(sr, br, off)
             },
             OP_RTI => {
-                assert_eq!(get_bits(operands, 0..12), 0b000000000000, "invalid instruction format"); // TODO: replace panic
+                assert_eq!(get_bits(operands, 0..12), 0b0000_0000_0000, "invalid instruction format"); // TODO: replace panic
                 Self::Rti
             },
             OP_NOT => {
@@ -293,7 +293,7 @@ impl SimInstr {
             OP_JMP => {
                 assert_eq!(get_bits(operands, 9..12), 0b000, "invalid instruction format"); // TODO: replace panic
                 let reg = Reg(get_bits(operands, 6..9) as u8);
-                assert_eq!(get_bits(operands, 0..6), 0b000000, "invalid instruction format"); // TODO: replace panic
+                assert_eq!(get_bits(operands, 0..6), 0b000_000, "invalid instruction format"); // TODO: replace panic
                 
                 Self::Jmp(reg)
             },

@@ -1,3 +1,6 @@
+//! Parser that converts tokens from an LC-3 assembly file into
+//! an AST.
+
 use std::borrow::Cow;
 
 use logos::Span;

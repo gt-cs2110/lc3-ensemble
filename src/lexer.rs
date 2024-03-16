@@ -1,6 +1,10 @@
-//! Lexer and parser of LC3 assembly.
-//! This converts an LC3 assembly file into
-//! an AST representation of each instruction.
+//! Tokenizer for LC-3 assembly.
+//! 
+//! This converts an LC-3 assembly file
+//! into a set of tokens, which can be
+//! converted to an AST by the [`parser`] module.
+//! 
+//! [`parser`]: crate::parser
 
 use std::num::IntErrorKind;
 

@@ -1,3 +1,5 @@
+//! Structs relating to the ASTs created from assembly files.
+
 pub mod sim;
 
 use std::fmt::Write as _;
@@ -111,13 +113,13 @@ mod offset_base {
         /// For example, `u16` has 16 bits and thus BITS == 16.
         const BITS: u32;
 
-        /// Truncates the given value to the provided bit size.
+        /// Truncates the given value to the provided `bit_size`.
         /// 
         /// This bit size is always known to be less than BITS.
         fn truncate(self, bit_size: u32) -> Self;
 
         /// The error to raise if a given value doesn't match
-        /// its provided value when truncated to a given bit_size.
+        /// its provided value when truncated to a given `bit_size`.
         fn does_not_fit_error(bit_size: u32) -> OffsetNewError;
     }
     
@@ -148,7 +150,9 @@ impl<OFF: OffsetBacking, const N: u32> Offset<OFF, N> {
     /// Creates a new offset value.
     /// This must fit within `N` bits of the representation, otherwise an error is raised.
     /// 
-    /// This will also fail if `N` is too large (e.g., for `u16`, larger than 16).
+    /// # Panics
+    /// 
+    /// This will panic if `N` is larger than the offset backing (e.g., for backing `u16`, larger than 16).
     pub fn new(n: OFF) -> Result<Self, OffsetNewError> {
         assert!(N <= OFF::BITS, "bit size {N} exceeds size of backing ({})", OFF::BITS);
         match n == n.truncate(N) {
@@ -162,6 +166,10 @@ impl<OFF: OffsetBacking, const N: u32> Offset<OFF, N> {
     /// 
     /// The extension is considered sign-extended if the offset's backing is signed,
     /// and it is considered zero-extended if the offset's backing is unsigned.
+    /// 
+    /// # Panics
+    /// 
+    /// This will panic if `N` is larger than the offset backing (e.g., for backing `u16`, larger than 16).
     pub fn new_trunc(n: OFF) -> Self {
         assert!(N <= OFF::BITS, "bit size {N} exceeds size of backing ({})", OFF::BITS);
         Self(n.truncate(N))
@@ -175,8 +183,9 @@ impl<OFF: OffsetBacking, const N: u32> Offset<OFF, N> {
 
 /// An offset or a label.
 /// 
-/// This is used to represent PCOffset operands 
-/// (such as PCOffset9 in `LD` and `ST` and PCOffset11 in `JSR`).
+/// This is used to represent [`PCOffset`] operands 
+/// (such as the PCOffset9 operand in `LD` and `ST` 
+/// and the PCOffset11 operand in `JSR`).
 /// 
 /// During the first assembly pass, the label is resolved and
 /// replaced with a regular [`Offset`] value.
