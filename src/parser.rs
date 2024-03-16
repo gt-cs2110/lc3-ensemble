@@ -140,17 +140,29 @@ impl<const N: u32> Parse for ImmOrReg<N> {
 
 impl<const N: u32> Parse for Offset<i16, N> {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
-        parser.match_(|t| match t {
-            &Token::Numeric(n) => Self::new(n as i16).map_err(|s| ParseErr::new(s.to_string())),
-            _ => Err(ParseErr::new("expected immediate value")),
+        parser.match_(|t| {
+            let off_val = match *t {
+                Token::Unsigned(n) => i16::try_from(n).map_err(|_| todo!("impl lex error if overflow")),
+                Token::Signed(n) => Ok(n),
+                _ => Err(ParseErr::new("expected immediate value"))
+            }?;
+            
+            Self::new(off_val)
+                .map_err(|s| ParseErr::new(s.to_string()))
         })
     }
 }
 impl<const N: u32> Parse for Offset<u16, N> {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
-        parser.match_(|t| match t {
-            &Token::Numeric(n) => Self::new(n).map_err(|s| ParseErr::new(s.to_string())),
-            _ => Err(ParseErr::new("expected immediate value")),
+        parser.match_(|t| {
+            let off_val = match *t {
+                Token::Unsigned(n) => Ok(n),
+                Token::Signed(n) => u16::try_from(n).map_err(|_| todo!("impl lex error if overflow")),
+                _ => Err(ParseErr::new("expected immediate value"))
+            }?;
+            
+            Self::new(off_val)
+                .map_err(|s| ParseErr::new(s.to_string()))
         })
     }
 }
@@ -179,13 +191,14 @@ fn parse_comma(t: &Token) -> Result<(), ParseErr> {
 impl Parse for Instruction {
     fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
         let opcode = parser.match_(|t| match t {
-            Token::Numeric(_) => Err(ParseErr::new("unexpected numeric")),
-            Token::Reg(_) => Err(ParseErr::new("unexpected register")),
-            Token::Ident(id) => Ok(id.to_string()),
+            Token::Unsigned(_)  => Err(ParseErr::new("unexpected numeric")),
+            Token::Signed(_)    => Err(ParseErr::new("unexpected numeric")),
+            Token::Reg(_)       => Err(ParseErr::new("unexpected register")),
+            Token::Ident(id)    => Ok(id.to_string()),
             Token::Directive(_) => Err(ParseErr::new("unexpected directive")),
-            Token::Colon => Err(ParseErr::new("unexpected colon")),
-            Token::Comma => Err(ParseErr::new("unexpected comma")),
-            Token::Comment => Err(ParseErr::new("unexpected comment")), // FIXME
+            Token::Colon        => Err(ParseErr::new("unexpected colon")),
+            Token::Comma        => Err(ParseErr::new("unexpected comma")),
+            Token::Comment      => Err(ParseErr::new("unexpected comment")), // FIXME
         })?;
 
         match &*opcode.to_uppercase() {

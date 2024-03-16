@@ -10,14 +10,19 @@ use logos::{Lexer, Logos};
 #[derive(Debug, Logos, PartialEq, Eq)]
 #[logos(skip r"[ \t]+", error = LexErr)]
 pub enum Token {
-    /// A numeric value (e.g., `9`, `#9`, `0b1001`, `0x9`, `x9`, `b1001`, etc.)
+    /// An unsigned numeric value (e.g., `9`, `#9`, `0b1001`, `0x9`, `x9`, `b1001`, etc.)
     #[regex(r"\d+", parse_unsigned_dec)]
     #[regex(r"#\d+", parse_unsigned_dec)]
+    #[regex(r"0?[Xx][\dA-Fa-f]+", parse_unsigned_hex)]
+    #[regex(r"0?[Bb][01]+", parse_unsigned_bin)]
+    Unsigned(u16),
+
+    /// A signed numeric value (e.g., `-9`, `#-9`, `0b-1001`, `x-7F`, etc.)
     #[regex(r"-\d+", parse_signed_dec)]
     #[regex(r"#-\d+", parse_signed_dec)]
-    #[regex(r"0?[Xx][\dA-Fa-f]+", parse_hex)]
-    #[regex(r"0?[Bb][01]+", parse_bin)]
-    Numeric(u16),
+    #[regex(r"0?[Xx]-[\dA-Fa-f]+", parse_signed_hex)]
+    #[regex(r"0?[Bb]-[01]+", parse_signed_bin)]
+    Signed(i16),
 
     /// A register value (i.e., `R0`-`R7`)
     #[regex(r"[Rr][0-7]", parse_reg)]
@@ -88,34 +93,43 @@ fn parse_unsigned_dec(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
         })
 }
 
-fn parse_signed_dec(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
+fn parse_signed_dec(lx: &Lexer<'_, Token>) -> Result<i16, LexErr> {
     let mut string = lx.slice();
     if lx.slice().starts_with('#') {
         string = &string[1..];
     }
 
-    match string.parse::<i16>() {
-        Ok(val) => Ok(val as u16),
-        Err(e) => {
-            let kind = match e.kind() {
-                IntErrorKind::Empty => LexErr::InvalidSigned,
-                IntErrorKind::InvalidDigit => LexErr::InvalidSigned,
-                IntErrorKind::PosOverflow => LexErr::DoesNotFitI16,
-                IntErrorKind::NegOverflow => LexErr::DoesNotFitI16,
-                IntErrorKind::Zero => unreachable!("IntErrorKind::Zero should not be emitted in parsing i16"),
-                _ => LexErr::UnknownIntErr,
-            };
-
-            Err(kind)
-        },
-    }
+    string.parse::<i16>()
+        .map_err(|e| match e.kind() {
+            IntErrorKind::Empty => LexErr::InvalidSigned,
+            IntErrorKind::InvalidDigit => LexErr::InvalidSigned,
+            IntErrorKind::PosOverflow => LexErr::DoesNotFitI16,
+            IntErrorKind::NegOverflow => LexErr::DoesNotFitI16,
+            IntErrorKind::Zero => unreachable!("IntErrorKind::Zero should not be emitted in parsing i16"),
+            _ => LexErr::UnknownIntErr,
+        })
 }
-fn parse_hex(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
+fn parse_unsigned_hex(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
     let Some((_, hex)) = lx.slice().split_once(['X', 'x']) else {
         unreachable!("Lexer slice should have contained an X or x");
     };
 
     u16::from_str_radix(hex, 16)
+        .map_err(|e| match e.kind() {
+            IntErrorKind::Empty => LexErr::InvalidHex,
+            IntErrorKind::InvalidDigit => LexErr::InvalidHex,
+            IntErrorKind::PosOverflow => LexErr::DoesNotFitU16,
+            IntErrorKind::NegOverflow => LexErr::DoesNotFitU16,
+            IntErrorKind::Zero => unreachable!("IntErrorKind::Zero should not be emitted in parsing u16"),
+            _ => LexErr::UnknownIntErr,
+        })
+}
+fn parse_signed_hex(lx: &Lexer<'_, Token>) -> Result<i16, LexErr> {
+    let Some((_, hex)) = lx.slice().split_once(['X', 'x']) else {
+        unreachable!("Lexer slice should have contained an X or x");
+    };
+
+    i16::from_str_radix(hex, 16)
         .map_err(|e| match e.kind() {
             IntErrorKind::Empty => LexErr::InvalidHex,
             IntErrorKind::InvalidDigit => LexErr::InvalidHex,
@@ -125,12 +139,27 @@ fn parse_hex(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
             _ => LexErr::UnknownIntErr,
         })
 }
-fn parse_bin(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
+fn parse_unsigned_bin(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
     let Some((_, bin)) = lx.slice().split_once(['B', 'b']) else {
         unreachable!("Lexer slice should have contained an B or b");
     };
 
     u16::from_str_radix(bin, 2)
+        .map_err(|e| match e.kind() {
+            IntErrorKind::Empty => LexErr::InvalidBin,
+            IntErrorKind::InvalidDigit => LexErr::InvalidBin,
+            IntErrorKind::PosOverflow => LexErr::DoesNotFitU16,
+            IntErrorKind::NegOverflow => LexErr::DoesNotFitU16,
+            IntErrorKind::Zero => unreachable!("IntErrorKind::Zero should not be emitted in parsing u16"),
+            _ => LexErr::UnknownIntErr,
+        })
+}
+fn parse_signed_bin(lx: &Lexer<'_, Token>) -> Result<i16, LexErr> {
+    let Some((_, bin)) = lx.slice().split_once(['B', 'b']) else {
+        unreachable!("Lexer slice should have contained an B or b");
+    };
+
+    i16::from_str_radix(bin, 2)
         .map_err(|e| match e.kind() {
             IntErrorKind::Empty => LexErr::InvalidBin,
             IntErrorKind::InvalidDigit => LexErr::InvalidBin,
