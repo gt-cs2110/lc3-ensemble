@@ -56,7 +56,11 @@ pub enum Token {
 
     /// A comment, which starts with a semicolon and spans the remaining part of the line.
     #[regex(r";.*")]
-    Comment
+    Comment,
+
+    /// A new line
+    #[regex(r"\r?\n")]
+    NewLine
 }
 
 macro_rules! ident_enum {
@@ -112,8 +116,6 @@ pub enum LexErr {
     DoesNotFitI16,
     /// Hex literal (starting with 0x or x) has invalid hex digits (or there is nothing following)
     InvalidHex,
-    /// Bin literal (starting with 0b or b) has invalid bin digits (or there is nothing following)
-    InvalidBin,
     /// Numeric literal could not be parsed as a decimal literal (typically because it's just `#` or `#-` or `-`)
     InvalidNumeric,
     /// Int parsing failed but the reason why is unknown
@@ -122,7 +124,18 @@ pub enum LexErr {
     #[default]
     InvalidSymbol
 }
-
+impl std::fmt::Display for LexErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LexErr::DoesNotFitU16  => f.write_str("numeric token does not fit 16-bit unsigned integer"),
+            LexErr::DoesNotFitI16  => f.write_str("numeric token does not fit 16-bit signed integer"),
+            LexErr::InvalidHex     => f.write_str("invalid hex literal"),
+            LexErr::InvalidNumeric => f.write_str("invalid decimal literal"),
+            LexErr::UnknownIntErr  => f.write_str("could not parse integer"),
+            LexErr::InvalidSymbol  => f.write_str("unrecognized symbol"),
+        }
+    }
+}
 /// Helper that converts an int error kind to its corresponding LexErr, based on the provided inputs.
 fn convert_int_error(e: &std::num::IntErrorKind, invalid_fmt_err: LexErr, overflow_err: LexErr) -> LexErr {
     match e {

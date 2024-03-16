@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 
-use logos::Span;
+use logos::{Logos, Span};
 
 use crate::ast::asm::{AsmInstr, Directive, Stmt, StmtKind};
 use crate::ast::{ImmOrReg, Offset, PCOffset, Reg};
@@ -18,15 +18,38 @@ impl ParseErr {
     }
 }
 trait Parse: Sized {
-    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr>;
+    fn parse(parser: &mut Parser) -> Result<Self, ParseErr>;
 }
 
-struct Parser<'s> {
-    tokens: &'s [(Token, Span)]
+struct Parser {
+    tokens: Vec<(Token, Span)>,
+    index: usize
 }
-impl Parser<'_> {
+impl Parser {
+    fn new(stream: &str) -> Result<Self, ParseErr> {
+        let tokens = Token::lexer(stream).spanned()
+            .map(|(m_token, span)| match m_token {
+                Ok(token) => Ok((token, span)),
+                Err(err)  => Err(ParseErr::new(err.to_string())),
+            })
+            .filter(|t| !matches!(t, Ok((Token::Comment, _)))) // filter comments
+            .collect::<Result<_, _>>()?;
+
+        Ok(Self { tokens, index: 0 })
+    }
+
     fn peek(&self) -> Option<&(Token, Span)> {
-        self.tokens.first()
+        self.tokens[self.index..].first()
+    }
+    fn advance(&mut self) {
+        self.index += 1;
+        self.index = self.index.min(self.tokens.len());
+    }
+    fn cursor(&self) -> Span {
+        match self.peek().or_else(|| self.tokens.last()) {
+            Some((_, span)) => span.clone(),
+            None => 0..0
+        }
     }
 
     fn parse<P: Parse>(&mut self) -> Result<P, ParseErr> {
@@ -37,29 +60,23 @@ impl Parser<'_> {
         
         let result = pred(tok);
         if result.is_ok() {
-            self.next();
+            self.advance();
         }
         result
     }
-    fn match_end(&mut self) -> Result<(), ParseErr> {
+    fn match_nl(&mut self) -> Result<(), ParseErr> {
         match self.peek() {
+            Some((Token::NewLine, _)) | None => {
+                self.advance();
+                Ok(())
+            }
             Some(_) => Err(ParseErr::new("expected end of line")),
-            None => Ok(())
         }
     }
 }
 
-impl<'s> Iterator for Parser<'s> {
-    type Item = &'s (Token, Span);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let (first, rest) = self.tokens.split_first()?;
-        self.tokens = rest;
-        Some(first)
-    }
-}
 impl Parse for Reg {
-    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+    fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
         parser.match_(|t| match t {
             &Token::Reg(reg) => Ok(Reg(reg)),
             _ => Err(ParseErr::new("expected register")),
@@ -67,7 +84,7 @@ impl Parse for Reg {
     }
 }
 impl<const N: u32> Parse for ImmOrReg<N> {
-    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+    fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
         match parser.parse() {
             Ok(imm) => Ok(ImmOrReg::Imm(imm)),
             Err(_) => match parser.parse() {
@@ -79,7 +96,7 @@ impl<const N: u32> Parse for ImmOrReg<N> {
 }
 
 impl<const N: u32> Parse for Offset<i16, N> {
-    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+    fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
         parser.match_(|t| {
             let off_val = match *t {
                 Token::Unsigned(n) => i16::try_from(n).map_err(|_| todo!("impl lex error if overflow")),
@@ -93,7 +110,7 @@ impl<const N: u32> Parse for Offset<i16, N> {
     }
 }
 impl<const N: u32> Parse for Offset<u16, N> {
-    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+    fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
         parser.match_(|t| {
             let off_val = match *t {
                 Token::Unsigned(n) => Ok(n),
@@ -110,7 +127,7 @@ impl<const N: u32> Parse for Offset<u16, N> {
 impl<OFF, const N: u32> Parse for PCOffset<OFF, N> 
     where Offset<OFF, N>: Parse
 {
-    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+    fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
         match parser.parse() {
             Ok(off) => Ok(PCOffset::Offset(off)),
             Err(_) => match parser.match_(parse_label) {
@@ -141,7 +158,7 @@ fn parse_label(t: &Token) -> Result<String, ParseErr> {
 }
 
 impl Parse for AsmInstr {
-    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+    fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
         let opcode = parser.match_(|t| match t {
             Token::Ident(id) if !matches!(id, Ident::Label(_)) => Ok(id.clone()),
             _ => Err(ParseErr::new("expected instruction"))
@@ -254,7 +271,7 @@ impl Parse for AsmInstr {
 }
 
 impl Parse for Directive {
-    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+    fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
         let directive = parser.match_(|t| match t {
             Token::Unsigned(_)   => Err(ParseErr::new("unexpected numeric")),
             Token::Signed(_)     => Err(ParseErr::new("unexpected numeric")),
@@ -264,7 +281,8 @@ impl Parse for Directive {
             Token::String(_)     => Err(ParseErr::new("unexpected string literal")),
             Token::Colon         => Err(ParseErr::new("unexpected colon")),
             Token::Comma         => Err(ParseErr::new("unexpected comma")),
-            Token::Comment       => Err(ParseErr::new("unexpected comment")), // FIXME
+            Token::Comment       => Err(ParseErr::new("unexpected comment")),
+            Token::NewLine       => Err(ParseErr::new("unexpected new line")),
         })?;
 
         match &*directive.to_uppercase() {
@@ -314,7 +332,7 @@ impl Parse for Directive {
 }
 
 impl Parse for StmtKind {
-    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+    fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
         match parser.peek() {
             Some((Token::Directive(_), _)) => Ok(StmtKind::Directive(parser.parse()?)),
             Some((Token::Ident(id), _)) if !matches!(id, Ident::Label(_)) => Ok(StmtKind::Instr(parser.parse()?)),
@@ -323,14 +341,15 @@ impl Parse for StmtKind {
     }
 }
 impl Parse for Stmt {
-    fn parse(parser: &mut Parser<'_>) -> Result<Self, ParseErr> {
+    fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
         let mut labels = vec![];
         while let Ok(label) = parser.match_(parse_label) {
             let _ = parser.match_(parse_colon); // skip colon if it exists
+            let _ = parser.match_nl(); // skip new line if it exists
             labels.push(label);
         }
         let nucleus = parser.parse()?;
-        parser.match_end()?;
+        parser.match_nl()?;
 
         Ok(Self { labels, nucleus })
     }
