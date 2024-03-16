@@ -35,9 +35,13 @@ pub enum Token {
     #[regex(r"[A-Za-z_]\w*", |lx| lx.slice().to_string())]
     Ident(String),
 
-    /// A directive (e.g. `.orig`, `.end`).
+    /// A directive (e.g., `.orig`, `.end`).
     #[regex(r"\.[A-Za-z_]\w*", |lx| lx.slice()[1..].to_string())]
     Directive(String),
+
+    /// A string literal (e.g., `"Hello!`)
+    #[regex(r#"".+[^\\]""#, parse_str_literal)]
+    String(String),
 
     /// A colon, which can optionally appear after labels
     #[token(":")]
@@ -123,4 +127,36 @@ fn parse_reg(lx: &Lexer<'_, Token>) -> u8 {
         .unwrap_or_else(|_| unreachable!("parse_reg should only be called with register 0-7"));
 
     regno
+}
+fn parse_str_literal(lx: &Lexer<'_, Token>) -> String {
+    // get the string inside quotes:
+    let mut remaining = &lx.slice()[1..(lx.slice().len() - 1)];
+    let mut buf = String::with_capacity(remaining.len());
+
+    // Look for escapes. Only a simple group of escapes are implemented.
+    // (e.g., `\n`, `\r`, etc.)
+    while let Some((left, right)) = remaining.split_once('\\') {
+        buf.push_str(left);
+
+        // this character is part of the escape:
+        let esc = right.as_bytes()
+            .first()
+            .unwrap_or_else(|| unreachable!("expected character after escape")); // there always has to be one, cause last character is not \
+        match esc {
+            b'n'  => buf.push('\n'),
+            b'r'  => buf.push('\r'),
+            b't'  => buf.push('\t'),
+            b'\\' => buf.push('\\'),
+            b'0'  => buf.push('\0'),
+            b'"'  => buf.push('\"'),
+            &c => {
+                buf.push('\\');
+                buf.push(char::from(c));
+            }
+        }
+        
+        remaining = &right[1..];
+    }
+    buf.push_str(remaining);
+    buf
 }

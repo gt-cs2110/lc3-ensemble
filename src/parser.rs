@@ -196,6 +196,7 @@ impl Parse for Instruction {
             Token::Reg(_)       => Err(ParseErr::new("unexpected register")),
             Token::Ident(id)    => Ok(id.to_string()),
             Token::Directive(_) => Err(ParseErr::new("unexpected directive")),
+            Token::String(_)    => Err(ParseErr::new("unexpected string literal")),
             Token::Colon        => Err(ParseErr::new("unexpected colon")),
             Token::Comma        => Err(ParseErr::new("unexpected comma")),
             Token::Comment      => Err(ParseErr::new("unexpected comment")), // FIXME
