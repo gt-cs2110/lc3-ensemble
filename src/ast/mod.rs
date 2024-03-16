@@ -163,6 +163,7 @@ impl<OFF: OffsetBacking, const N: u32> Offset<OFF, N> {
     /// The extension is considered sign-extended if the offset's backing is signed,
     /// and it is considered zero-extended if the offset's backing is unsigned.
     pub fn new_trunc(n: OFF) -> Self {
+        assert!(N <= OFF::BITS, "bit size {N} exceeds size of backing ({})", OFF::BITS);
         Self(n.truncate(N))
     }
 
