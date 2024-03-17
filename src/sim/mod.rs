@@ -1,4 +1,4 @@
-use crate::ast::sim::SimInstr;
+use crate::ast::sim::{ObjFile, SimInstr};
 use crate::ast::Reg;
 
 struct Simulator {
@@ -18,7 +18,8 @@ struct Simulator {
     /// I am hoping this is large enough that it doesn't overflow :)
     sr_entered: u64
 }
-struct Word {
+#[derive(Clone, Copy)]
+pub(crate) struct Word {
     data: u16,
     init: bool 
 }
@@ -26,11 +27,27 @@ struct Word {
 impl Simulator {
     fn new() -> Self {
         Self {
-            mem: std::array::from_fn(|_| Word::new()),
-            reg_file: std::array::from_fn(|_| Word::new()),
+            mem: std::array::from_fn(|_| Word::new_uninit()),
+            reg_file: std::array::from_fn(|_| Word::new_uninit()),
             pc: 0x3000,
             cc: 0b010,
             sr_entered: 0
+        }
+    }
+    fn load_obj_file(&mut self, obj: &ObjFile) {
+        for (&start, words) in &obj.block_map {
+            let end = start.wrapping_add(words.len() as u16);
+            if start <= end {
+                // contiguous copy
+                let range = (start as usize)..(end as usize);
+                self.mem[range].copy_from_slice(words);
+            } else {
+                // discontiguous copy
+                let len = start.wrapping_neg() as usize;
+                let (left, right) = words.split_at(len);
+                self.mem[(start as usize)..].copy_from_slice(left);
+                self.mem[..(end as usize)].copy_from_slice(right);
+            }
         }
     }
 
@@ -180,10 +197,16 @@ impl Simulator {
     }
 }
 impl Word {
-    fn new() -> Self {
+    pub(crate) fn new_uninit() -> Self {
         Self {
             data: 0,
             init: false,
+        }
+    }
+    pub(crate) fn new_init(data: u16) -> Self {
+        Self {
+            data,
+            init: true,
         }
     }
 

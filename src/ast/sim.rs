@@ -5,9 +5,12 @@
 //! 
 //! [`asm::AsmInstr`]: [`crate::ast::asm::AsmInstr`]
 
+use std::collections::BTreeMap;
 use std::ops::Range;
 
-use super::{CondCode, IOffset, ImmOrReg, Reg, TrapVect8};
+use crate::sim::Word;
+
+use super::{CondCode, IOffset, ImmOrReg, OffsetNewError, Reg, TrapVect8};
 
 const OP_BR: u16   = 0b0000; 
 const OP_ADD: u16  = 0b0001; 
@@ -336,4 +339,57 @@ fn join_bits<const N: usize>(bits: [(u16, Range<usize>); N]) -> u16 {
             (val & mask) << start
         })
         .fold(0, std::ops::BitOr::bitor)
+}
+
+pub enum CodegenError {
+    OverlappingBlocks,
+    OffsetNewError(OffsetNewError),
+    CouldNotFindLabel,
+    CannotDetAddress,
+}
+pub struct SimBlock {
+    pub(crate) start: u16,
+    pub(crate) words: Vec<Word>
+}
+impl SimBlock {
+    pub(crate) fn push(&mut self, data: u16) {
+        self.words.push(Word::new_init(data));
+    }
+    pub(crate) fn shift(&mut self, n: u16) {
+        self.words.extend({
+            std::iter::from_fn(|| Some(Word::new_uninit()))
+                .take(n as usize)
+        })
+    }
+}
+impl Extend<u16> for SimBlock {
+    fn extend<T: IntoIterator<Item = u16>>(&mut self, iter: T) {
+        self.words.extend(iter.into_iter().map(Word::new_init))
+    }
+}
+pub struct ObjFile {
+    pub(crate) block_map: BTreeMap<u16, Vec<Word>>
+}
+impl ObjFile {
+    fn new(blocks: Vec<SimBlock>) -> Result<Self, CodegenError> {
+        let mut block_map: BTreeMap<u16, Vec<_>> = BTreeMap::new();
+
+        for SimBlock { start, words } in blocks {
+            if words.is_empty() { continue; }
+
+            let prev_block = block_map.range(..start).next_back()
+                .or_else(|| block_map.last_key_value());
+
+            if let Some((&addr, block_words)) = prev_block {
+                // check if this block overlaps with the previous block
+                if (start.wrapping_sub(addr) as usize) < block_words.len() {
+                    return Err(CodegenError::OverlappingBlocks);
+                }
+            }
+
+            block_map.insert(start, words);
+        }
+
+        Ok(ObjFile { block_map })
+    }
 }

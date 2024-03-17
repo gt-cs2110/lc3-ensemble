@@ -353,7 +353,7 @@ impl Parse for Stmt {
         let mut labels = vec![];
         while let Ok(label) = parser.match_(parse_label) {
             let _ = parser.match_(parse_colon); // skip colon if it exists
-            let _ = parser.match_nl(); // skip new line if it exists
+            while parser.peek().is_some() && parser.match_nl().is_ok() {}  // read nls until we get somewhere
             labels.push(label);
         }
         let nucleus = parser.parse()?;
