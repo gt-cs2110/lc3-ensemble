@@ -204,135 +204,112 @@ impl SimInstr {
     /// Converts a 16-bit bytecode representation into a `SimInstr`.
     /// This will error if the format is invalid.
     pub fn decode(word: u16) -> Result<Self, SimErr> {
-        let opcode = get_bits(word, 12..16);
+        // Note, there's a lot of magic being used in this function.
+        // Refer to `DecodeUtils` at the bottom of this file.
+        let opcode = word.slice(12..16);
+
         match opcode {
             OP_BR => {
-                let cc = get_bits(word, 9..12) as u8;
-                let off = IOffset::new_trunc(get_bits(word, 0..9) as i16);
+                let cc  = word.slice(9..12) as u8;
+                let off = word.slice(0..9).interpret();
                 Ok(Self::BR(cc, off))
             },
             OP_ADD => {
-                let dr = Reg(get_bits(word, 9..12) as u8);
-                let sr1 = Reg(get_bits(word, 6..9) as u8);
-                let sr2 = match get_bits(word, 5..6) != 0 {
-                    false => match get_bits(word, 3..5) == 0b00 {
-                        true  => ImmOrReg::Reg(Reg(get_bits(word, 0..3) as u8)),
-                        false => return Err(SimErr::InvalidInstrFormat)
+                let dr  = word.slice(9..12).interpret();
+                let sr1 = word.slice(6..9).interpret();
+                let sr2 = match word.slice(5..6) != 0 {
+                    false => {
+                        word.slice(3..5).assert_equals(0b00)?;
+                        ImmOrReg::Reg(word.slice(0..3).interpret())
                     },
-                    true  => ImmOrReg::Imm(IOffset::new_trunc(get_bits(word, 0..5) as i16)),
+                    true  => ImmOrReg::Imm(word.slice(0..5).interpret()),
                 };
-
                 Ok(Self::ADD(dr, sr1, sr2))
             },
             OP_LD => {
-                let dr = Reg(get_bits(word, 9..12) as u8);
-                let off = IOffset::new_trunc(get_bits(word, 0..9) as i16);
-
+                let dr  = word.slice(9..12).interpret();
+                let off = word.slice(0..9).interpret();
                 Ok(Self::LD(dr, off))
             }
             OP_ST => {
-                let sr = Reg(get_bits(word, 9..12) as u8);
-                let off = IOffset::new_trunc(get_bits(word, 0..9) as i16);
-
+                let sr  = word.slice(9..12).interpret();
+                let off = word.slice(0..9).interpret();
                 Ok(Self::ST(sr, off))
             },
             OP_JSR => {
-                let val = match get_bits(word, 11..12) != 0 {
-                    true  => ImmOrReg::Imm(IOffset::new_trunc(get_bits(word, 0..11) as i16)),
-                    false => match get_bits(word, 9..11) == 0b00 && get_bits(word, 0..6) == 0b000_000 {
-                        true  => ImmOrReg::Reg(Reg(get_bits(word, 6..9) as u8)),
-                        false => return Err(SimErr::InvalidInstrFormat)
+                let val = match word.slice(11..12) != 0 {
+                    true  => ImmOrReg::Imm(word.slice(0..11).interpret()),
+                    false => {
+                        word.slice(9..11).assert_equals(0b00)?;
+                        word.slice(0..6).assert_equals(0b000_000)?;
+                        ImmOrReg::Reg(word.slice(6..9).interpret())
                     },
                 };
-
                 Ok(Self::JSR(val))
             },
             OP_AND => {
-                let dr = Reg(get_bits(word, 9..12) as u8);
-                let sr1 = Reg(get_bits(word, 6..9) as u8);
-                let sr2 = match get_bits(word, 5..6) != 0 {
-                    false => match get_bits(word, 3..5) == 0b00 {
-                        true  => ImmOrReg::Reg(Reg(get_bits(word, 0..3) as u8)),
-                        false => return Err(SimErr::InvalidInstrFormat)
+                let dr  = word.slice(9..12).interpret();
+                let sr1 = word.slice(6..9).interpret();
+                let sr2 = match word.slice(5..6) != 0 {
+                    false => {
+                        word.slice(3..5).assert_equals(0b00)?;
+                        ImmOrReg::Reg(word.slice(0..3).interpret())
                     },
-                    true  => ImmOrReg::Imm(IOffset::new_trunc(get_bits(word, 0..5) as i16)),
+                    true  => ImmOrReg::Imm(word.slice(0..5).interpret()),
                 };
-
                 Ok(Self::AND(dr, sr1, sr2))
             },
             OP_LDR => {
-                let dr = Reg(get_bits(word, 9..12) as u8);
-                let br = Reg(get_bits(word, 6..9) as u8);
-                let off = IOffset::new_trunc(get_bits(word, 0..6) as i16);
-
+                let dr  = word.slice(9..12).interpret();
+                let br  = word.slice(6..9).interpret();
+                let off = word.slice(0..6).interpret();
                 Ok(Self::LDR(dr, br, off))
             },
             OP_STR => {
-                let sr = Reg(get_bits(word, 9..12) as u8);
-                let br = Reg(get_bits(word, 6..9) as u8);
-                let off = IOffset::new_trunc(get_bits(word, 0..6) as i16);
-
+                let sr  = word.slice(9..12).interpret();
+                let br  = word.slice(6..9).interpret();
+                let off = word.slice(0..6).interpret();
                 Ok(Self::STR(sr, br, off))
             },
             OP_RTI => {
-                match get_bits(word, 0..12) == 0b0000_0000_0000 {
-                    true  => Ok(Self::RTI),
-                    false => Err(SimErr::InvalidInstrFormat)
-                }
+                word.slice(0..12).assert_equals(0b0000_0000_0000)?;
+                Ok(Self::RTI)
             },
             OP_NOT => {
-                let dr = Reg(get_bits(word, 9..12) as u8);
-                let sr = Reg(get_bits(word, 6..9) as u8);
-
-                match get_bits(word, 0..6) == 0b111_111 {
-                    true  => Ok(Self::NOT(dr, sr)),
-                    false => Err(SimErr::InvalidInstrFormat),
-                }
+                let dr = word.slice(9..12).interpret();
+                let sr = word.slice(6..9).interpret();
+                word.slice(0..6).assert_equals(0b111_111)?;
+                Ok(Self::NOT(dr, sr))
             },
             OP_LDI => {
-                let dr = Reg(get_bits(word, 9..12) as u8);
-                let off = IOffset::new_trunc(get_bits(word, 0..9) as i16);
-
+                let dr  = word.slice(9..12).interpret();
+                let off = word.slice(0..9).interpret();
                 Ok(Self::LDI(dr, off))
             },
             OP_STI => {
-                let sr = Reg(get_bits(word, 9..12) as u8);
-                let off = IOffset::new_trunc(get_bits(word, 0..9) as i16);
-
+                let sr  = word.slice(9..12).interpret();
+                let off = word.slice(0..9).interpret();
                 Ok(Self::STI(sr, off))
             },
             OP_JMP => {
-                let reg = match get_bits(word, 9..11) == 0b00 && get_bits(word, 0..6) == 0b000_000 {
-                    true  => Reg(get_bits(word, 6..9) as u8),
-                    false => return Err(SimErr::InvalidInstrFormat)
-                };
-                
+                word.slice(9..11).assert_equals(0b00)?;
+                let reg = word.slice(6..9).interpret();
+                word.slice(0..6).assert_equals(0b000_000)?;
                 Ok(Self::JMP(reg))
             },
             OP_LEA => {
-                let dr = Reg(get_bits(word, 9..12) as u8);
-                let off = IOffset::new_trunc(get_bits(word, 0..9) as i16);
-
+                let dr  = word.slice(9..12).interpret();
+                let off = word.slice(0..9).interpret();
                 Ok(Self::LEA(dr, off))
             },
             OP_TRAP => {
-                let vect = match get_bits(word, 8..12) == 0b0000 {
-                    true  => TrapVect8::new_trunc(get_bits(word, 0..8)),
-                    false => return Err(SimErr::InvalidInstrFormat),
-                };
-                
+                word.slice(8..12).assert_equals(0b0000)?;
+                let vect = word.slice(0..8).interpret();
                 Ok(Self::TRAP(vect))
             },
             _ => Err(SimErr::InvalidOpcode)
         }
     }
-}
-
-/// Gets the bits of n within the range provided,
-/// returning them as the least-significant bits
-fn get_bits(n: u16, r: Range<usize>) -> u16 {
-    let len = r.end - r.start;
-    (n >> r.start) & ((1 << len) - 1)
 }
 
 /// Given a sequence of values and ranges, it writes each value into its corresponding range,
@@ -345,4 +322,51 @@ fn join_bits<const N: usize>(bits: [(u16, Range<usize>); N]) -> u16 {
             (val & mask) << start
         })
         .fold(0, std::ops::BitOr::bitor)
+}
+
+trait FromBits: Sized {
+    /// Converts bits into self, assuming bits are the correct size.
+    fn from_bits(bits: u16) -> Self;
+}
+trait DecodeUtils: Sized + Eq {
+    /// Interprets the bits as another value.
+    fn interpret<T: FromBits>(self) -> T;
+
+    /// Asserts the two are equal or errors.
+    fn assert_equals(self, bits: Self) -> Result<(), SimErr> {
+        match self == bits {
+            true  => Ok(()),
+            false => Err(SimErr::InvalidInstrFormat),
+        }
+    }
+
+    /// Gets the bits of `self` within the range provided,
+    /// returning them as the least-significant bits
+    fn slice(self, range: Range<usize>) -> Self;
+}
+impl DecodeUtils for u16 {
+    fn interpret<T: FromBits>(self) -> T {
+        T::from_bits(self)
+    }
+
+    fn slice(self, range: Range<usize>) -> Self {
+        let len = range.end - range.start;
+        (self >> range.start) & ((1 << len) - 1)
+    }
+}
+
+impl FromBits for Reg {
+    fn from_bits(bits: u16) -> Self {
+        Reg(bits as u8)
+    }
+}
+impl<const N: u32> FromBits for IOffset<N> {
+    fn from_bits(bits: u16) -> Self {
+        Self::new_trunc(bits as i16)
+    }
+}
+impl<const N: u32> FromBits for crate::ast::Offset<u16, N> {
+    fn from_bits(bits: u16) -> Self {
+        Self::new_trunc(bits)
+    }
 }
