@@ -185,8 +185,8 @@ impl<OFF: OffsetBacking, const N: u32> Offset<OFF, N> {
 /// An offset or a label.
 /// 
 /// This is used to represent [`PCOffset`] operands 
-/// (such as the PCOffset9 operand in `LD` and `ST` 
-/// and the PCOffset11 operand in `JSR`).
+/// (such as the `PCOffset9` operand in `LD` and `ST` 
+/// and the `PCOffset11` operand in `JSR`).
 /// 
 /// During the first assembly pass, the label is resolved and
 /// replaced with a regular [`Offset`] value.

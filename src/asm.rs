@@ -97,12 +97,13 @@ impl SymbolTable {
 
     /// Gets the address of a given label (if it exists).
     pub fn get(&self, label: &str) -> Option<u16> {
-        self.labels.get(&label.to_uppercase()).cloned()
+        self.labels.get(&label.to_uppercase()).copied()
     }
 }
 
 
-/// Replaces a PCOffset value with an Offset value by calculating the offset from a given label (if this PCOffset represents a label).
+/// Replaces a [`PCOffset`] value with an [`Offset`] value by calculating the offset from a given label
+/// (if this `PCOffset` represents a label).
 fn replace_pc_offset<const N: u32>(off: PCOffset<i16, N>, lc: u16, sym: &SymbolTable) -> Result<IOffset<N>, AsmErr> {
     match off {
         PCOffset::Offset(off) => Ok(off),
@@ -250,12 +251,12 @@ impl ObjBlock {
         self.words.extend({
             std::iter::from_fn(|| Some(Word::new_uninit()))
                 .take(n as usize)
-        })
+        });
     }
 }
 impl Extend<u16> for ObjBlock {
     fn extend<T: IntoIterator<Item = u16>>(&mut self, iter: T) {
-        self.words.extend(iter.into_iter().map(Word::new_init))
+        self.words.extend(iter.into_iter().map(Word::new_init));
     }
 }
 
@@ -301,8 +302,18 @@ impl ObjectFile {
     }
 
     /// Get an iterator over all of the blocks of the object file.
-    pub fn iter(&self) -> std::collections::btree_map::Iter<'_, u16, Vec<Word>> {
+    pub fn iter(&self) -> ObjFileIter<'_> {
         self.block_map.iter()
+    }
+}
+
+type ObjFileIter<'o> = std::collections::btree_map::Iter<'o, u16, Vec<Word>>;
+impl<'o> IntoIterator for &'o ObjectFile {
+    type Item = <Self::IntoIter as Iterator>::Item;
+    type IntoIter = ObjFileIter<'o>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 impl Default for ObjectFile {
