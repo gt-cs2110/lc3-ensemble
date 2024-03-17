@@ -9,6 +9,15 @@ use crate::asm::ObjectFile;
 use crate::ast::sim::SimInstr;
 use crate::ast::Reg;
 
+/// Errors that can occur during simulation.
+pub enum SimErr {
+    /// Word was decoded, but the opcode was invalid.
+    InvalidOpcode,
+    /// Word was decoded, and the opcode is recognized,
+    /// but the instruction's format is invalid.
+    InvalidInstrFormat
+}
+
 /// Executes assembled code.
 #[derive(Debug)]
 pub struct Simulator {
@@ -88,15 +97,15 @@ impl Simulator {
     }
 
     /// Start the simulator's execution.
-    pub fn start(&mut self) {
+    pub fn start(&mut self) -> Result<(), SimErr> {
         loop {
-            self.step_in();
+            self.step_in()?;
         }
     }
     /// Perform one step through the simulator's execution.
-    pub fn step_in(&mut self) {
+    pub fn step_in(&mut self) -> Result<(), SimErr> {
         let word = self.access_mem(self.pc).get_unsigned();
-        let instr = SimInstr::decode(word);
+        let instr = SimInstr::decode(word)?;
         self.pc += 1;
 
         match instr {
@@ -202,24 +211,30 @@ impl Simulator {
                 self.sr_entered += 1;
             },
         }
+
+        Ok(())
     }
     /// Perform one step through the simulator's execution, treating complete subroutines as one step.
-    pub fn step_over(&mut self) {
+    pub fn step_over(&mut self) -> Result<(), SimErr> {
         let curr_frame = self.sr_entered;
-        self.step_in();
+        self.step_in()?;
         // step until we have landed back in the same frame
         while curr_frame < self.sr_entered {
-            self.step_in();
+            self.step_in()?;
         }
+
+        Ok(())
     }
     /// Run through the simulator's execution until the subroutine is exited.
-    pub fn step_out(&mut self) {
+    pub fn step_out(&mut self) -> Result<(), SimErr> {
         let curr_frame = self.sr_entered;
-        self.step_in();
+        self.step_in()?;
         // step until we get out of this frame
         while curr_frame != 0 && curr_frame <= self.sr_entered {
-            self.step_in();
+            self.step_in()?;
         }
+
+        Ok(())
     }
 }
 impl Default for Simulator {

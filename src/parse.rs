@@ -489,11 +489,19 @@ impl Parse for StmtKind {
 impl Parse for Stmt {
     fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
         let mut labels = vec![];
-        while let Ok(Label(label)) = parser.parse() {
-            parser.match_::<Colon>(); // skip colon if it exists
-            while parser.peek().is_some() && parser.match_::<End>().is_some() {}  // read nls until we get somewhere
-            labels.push(label);
+
+        // Scan through labels and new lines until we find an instruction
+        while !parser.is_empty() {
+            match parser.match_() {
+                Some(Either::Left(Label(label))) => {
+                    parser.match_::<Colon>(); // skip colon if it exists
+                    labels.push(label);
+                }
+                Some(Either::Right(End)) => {},
+                _ => break
+            }
         }
+        
         let nucleus = parser.parse()?;
         parser.parse::<End>()?;
 

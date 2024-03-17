@@ -7,6 +7,8 @@
 
 use std::ops::Range;
 
+use crate::sim::SimErr;
+
 use super::{CondCode, IOffset, ImmOrReg, Reg, TrapVect8};
 
 const OP_BR: u16   = 0b0000; 
@@ -201,120 +203,127 @@ impl SimInstr {
 
     /// Converts a 16-bit bytecode representation into a `SimInstr`.
     /// This will error if the format is invalid.
-    pub fn decode(word: u16) -> Self {
-        let (opcode, operands) = (word >> 4, (word << 4) >> 4);
+    pub fn decode(word: u16) -> Result<Self, SimErr> {
+        let opcode = get_bits(word, 12..16);
         match opcode {
             OP_BR => {
-                let cc = get_bits(operands, 9..12) as u8;
-                let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
-                Self::BR(cc, off)
+                let cc = get_bits(word, 9..12) as u8;
+                let off = IOffset::new_trunc(get_bits(word, 0..9) as i16);
+                Ok(Self::BR(cc, off))
             },
             OP_ADD => {
-                let dr = Reg(get_bits(operands, 9..12) as u8);
-                let sr1 = Reg(get_bits(operands, 6..9) as u8);
-                let sr2 = match get_bits(operands, 5..6) != 0 {
-                    false => {
-                        assert_eq!(get_bits(operands, 3..5), 0b00, "invalid instruction format"); // TODO: replace panic
-                        ImmOrReg::Reg(Reg(get_bits(operands, 0..3) as u8))
+                let dr = Reg(get_bits(word, 9..12) as u8);
+                let sr1 = Reg(get_bits(word, 6..9) as u8);
+                let sr2 = match get_bits(word, 5..6) != 0 {
+                    false => match get_bits(word, 3..5) == 0b00 {
+                        true  => ImmOrReg::Reg(Reg(get_bits(word, 0..3) as u8)),
+                        false => return Err(SimErr::InvalidInstrFormat)
                     },
-                    true  => ImmOrReg::Imm(IOffset::new_trunc(get_bits(operands, 0..5) as i16)),
+                    true  => ImmOrReg::Imm(IOffset::new_trunc(get_bits(word, 0..5) as i16)),
                 };
 
-                Self::ADD(dr, sr1, sr2)
+                Ok(Self::ADD(dr, sr1, sr2))
             },
             OP_LD => {
-                let dr = Reg(get_bits(operands, 9..12) as u8);
-                let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
+                let dr = Reg(get_bits(word, 9..12) as u8);
+                let off = IOffset::new_trunc(get_bits(word, 0..9) as i16);
 
-                Self::LD(dr, off)
+                Ok(Self::LD(dr, off))
             }
             OP_ST => {
-                let sr = Reg(get_bits(operands, 9..12) as u8);
-                let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
+                let sr = Reg(get_bits(word, 9..12) as u8);
+                let off = IOffset::new_trunc(get_bits(word, 0..9) as i16);
 
-                Self::ST(sr, off)
+                Ok(Self::ST(sr, off))
             },
             OP_JSR => {
-                let val = match get_bits(operands, 11..12) != 0 {
-                    true  => ImmOrReg::Imm(IOffset::new_trunc(get_bits(operands, 0..11) as i16)),
-                    false => {
-                        assert_eq!(get_bits(operands, 9..11), 0b00, "invalid instruction format"); // TODO: replace panic
-                        assert_eq!(get_bits(operands, 0..6), 0b000_000, "invalid instruction format"); // TODO: replace panic
-                        ImmOrReg::Reg(Reg(get_bits(operands, 6..9) as u8))
+                let val = match get_bits(word, 11..12) != 0 {
+                    true  => ImmOrReg::Imm(IOffset::new_trunc(get_bits(word, 0..11) as i16)),
+                    false => match get_bits(word, 9..11) == 0b00 && get_bits(word, 0..6) == 0b000_000 {
+                        true  => ImmOrReg::Reg(Reg(get_bits(word, 6..9) as u8)),
+                        false => return Err(SimErr::InvalidInstrFormat)
                     },
                 };
 
-                Self::JSR(val)
+                Ok(Self::JSR(val))
             },
             OP_AND => {
-                let dr = Reg(get_bits(operands, 9..12) as u8);
-                let sr1 = Reg(get_bits(operands, 6..9) as u8);
-                let sr2 = match get_bits(operands, 5..6) != 0 {
-                    false => {
-                        assert_eq!(get_bits(operands, 3..5), 0b00, "invalid instruction format"); // TODO: replace panic
-                        ImmOrReg::Reg(Reg(get_bits(operands, 0..3) as u8))
+                let dr = Reg(get_bits(word, 9..12) as u8);
+                let sr1 = Reg(get_bits(word, 6..9) as u8);
+                let sr2 = match get_bits(word, 5..6) != 0 {
+                    false => match get_bits(word, 3..5) == 0b00 {
+                        true  => ImmOrReg::Reg(Reg(get_bits(word, 0..3) as u8)),
+                        false => return Err(SimErr::InvalidInstrFormat)
                     },
-                    true  => ImmOrReg::Imm(IOffset::new_trunc(get_bits(operands, 0..5) as i16)),
+                    true  => ImmOrReg::Imm(IOffset::new_trunc(get_bits(word, 0..5) as i16)),
                 };
 
-                Self::AND(dr, sr1, sr2)
+                Ok(Self::AND(dr, sr1, sr2))
             },
             OP_LDR => {
-                let dr = Reg(get_bits(operands, 9..12) as u8);
-                let br = Reg(get_bits(operands, 6..9) as u8);
-                let off = IOffset::new_trunc(get_bits(operands, 0..6) as i16);
+                let dr = Reg(get_bits(word, 9..12) as u8);
+                let br = Reg(get_bits(word, 6..9) as u8);
+                let off = IOffset::new_trunc(get_bits(word, 0..6) as i16);
 
-                Self::LDR(dr, br, off)
+                Ok(Self::LDR(dr, br, off))
             },
             OP_STR => {
-                let sr = Reg(get_bits(operands, 9..12) as u8);
-                let br = Reg(get_bits(operands, 6..9) as u8);
-                let off = IOffset::new_trunc(get_bits(operands, 0..6) as i16);
+                let sr = Reg(get_bits(word, 9..12) as u8);
+                let br = Reg(get_bits(word, 6..9) as u8);
+                let off = IOffset::new_trunc(get_bits(word, 0..6) as i16);
 
-                Self::STR(sr, br, off)
+                Ok(Self::STR(sr, br, off))
             },
             OP_RTI => {
-                assert_eq!(get_bits(operands, 0..12), 0b0000_0000_0000, "invalid instruction format"); // TODO: replace panic
-                Self::RTI
+                match get_bits(word, 0..12) == 0b0000_0000_0000 {
+                    true  => Ok(Self::RTI),
+                    false => Err(SimErr::InvalidInstrFormat)
+                }
             },
             OP_NOT => {
-                let dr = Reg(get_bits(operands, 9..12) as u8);
-                let sr = Reg(get_bits(operands, 6..9) as u8);
-                assert_eq!(get_bits(operands, 0..6), 0b111111, "invalid instruction format"); // TODO: replace panic
+                let dr = Reg(get_bits(word, 9..12) as u8);
+                let sr = Reg(get_bits(word, 6..9) as u8);
 
-                Self::NOT(dr, sr)
+                match get_bits(word, 0..6) == 0b111_111 {
+                    true  => Ok(Self::NOT(dr, sr)),
+                    false => Err(SimErr::InvalidInstrFormat),
+                }
             },
             OP_LDI => {
-                let dr = Reg(get_bits(operands, 9..12) as u8);
-                let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
+                let dr = Reg(get_bits(word, 9..12) as u8);
+                let off = IOffset::new_trunc(get_bits(word, 0..9) as i16);
 
-                Self::LDI(dr, off)
+                Ok(Self::LDI(dr, off))
             },
             OP_STI => {
-                let sr = Reg(get_bits(operands, 9..12) as u8);
-                let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
+                let sr = Reg(get_bits(word, 9..12) as u8);
+                let off = IOffset::new_trunc(get_bits(word, 0..9) as i16);
 
-                Self::STI(sr, off)
+                Ok(Self::STI(sr, off))
             },
             OP_JMP => {
-                assert_eq!(get_bits(operands, 9..12), 0b000, "invalid instruction format"); // TODO: replace panic
-                let reg = Reg(get_bits(operands, 6..9) as u8);
-                assert_eq!(get_bits(operands, 0..6), 0b000_000, "invalid instruction format"); // TODO: replace panic
+                let reg = match get_bits(word, 9..11) == 0b00 && get_bits(word, 0..6) == 0b000_000 {
+                    true  => Reg(get_bits(word, 6..9) as u8),
+                    false => return Err(SimErr::InvalidInstrFormat)
+                };
                 
-                Self::JMP(reg)
+                Ok(Self::JMP(reg))
             },
             OP_LEA => {
-                let dr = Reg(get_bits(operands, 9..12) as u8);
-                let off = IOffset::new_trunc(get_bits(operands, 0..9) as i16);
+                let dr = Reg(get_bits(word, 9..12) as u8);
+                let off = IOffset::new_trunc(get_bits(word, 0..9) as i16);
 
-                Self::LEA(dr, off)
+                Ok(Self::LEA(dr, off))
             },
             OP_TRAP => {
-                assert_eq!(get_bits(operands, 8..12), 0b0000, "invalid instruction format"); // TODO: replace panic
-                let vect = TrapVect8::new_trunc(get_bits(operands, 0..8));
-                Self::TRAP(vect)
+                let vect = match get_bits(word, 8..12) == 0b0000 {
+                    true  => TrapVect8::new_trunc(get_bits(word, 0..8)),
+                    false => return Err(SimErr::InvalidInstrFormat),
+                };
+                
+                Ok(Self::TRAP(vect))
             },
-            _ => panic!("invalid opcode") // TODO: replace panic
+            _ => Err(SimErr::InvalidOpcode)
         }
     }
 }
