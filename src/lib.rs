@@ -2,7 +2,6 @@
 
 #![warn(missing_docs)]
 
-pub mod lexer;
-pub mod parser;
+pub mod parse;
 mod sim;
 pub mod ast;

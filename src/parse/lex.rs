@@ -1,10 +1,8 @@
 //! Tokenizer for LC-3 assembly.
 //! 
-//! This converts an LC-3 assembly file
-//! into a set of tokens, which can be
-//! converted to an AST by the [`parser`] module.
-//! 
-//! [`parser`]: crate::parser
+//! This module holds the tokens that characterize LC-3 assembly ([`Token`]).
+//! This module is used by the parser to facilitate the conversion of
+//! assembly source code into an AST.
 
 use std::num::IntErrorKind;
 
@@ -15,19 +13,19 @@ use logos::{Lexer, Logos};
 #[logos(skip r"[ \t]+", error = LexErr)]
 pub enum Token {
     /// An unsigned numeric value (e.g., `9`, `#14`, x7F`, etc.)
-    #[regex(r"\d+", parse_unsigned_dec)]
-    #[regex(r"#\d+", parse_unsigned_dec)]
-    #[regex(r"[Xx][\dA-Fa-f]+", parse_unsigned_hex)]
+    #[regex(r"\d+", lex_unsigned_dec)]
+    #[regex(r"#\d+", lex_unsigned_dec)]
+    #[regex(r"[Xx][\dA-Fa-f]+", lex_unsigned_hex)]
     Unsigned(u16),
 
     /// A signed numeric value (e.g., `-9`, `#-14`, x-7F`, etc.)
-    #[regex(r"-\d+", parse_signed_dec)]
-    #[regex(r"#-\d+", parse_signed_dec)]
-    #[regex(r"[Xx]-[\dA-Fa-f]+", parse_signed_hex)]
+    #[regex(r"-\d+", lex_signed_dec)]
+    #[regex(r"#-\d+", lex_signed_dec)]
+    #[regex(r"[Xx]-[\dA-Fa-f]+", lex_signed_hex)]
     Signed(i16),
 
     /// A register value (i.e., `R0`-`R7`)
-    #[regex(r"[Rr][0-7]", parse_reg)]
+    #[regex(r"[Rr][0-7]", lex_reg)]
     Reg(u8),
 
     /// An identifier. This can refer to either:
@@ -43,7 +41,7 @@ pub enum Token {
     Directive(String),
 
     /// A string literal (e.g., `"Hello!`)
-    #[regex(r#"".+[^\\]""#, parse_str_literal)]
+    #[regex(r#"".+[^\\]""#, lex_str_literal)]
     String(String),
 
     /// A colon, which can optionally appear after labels
@@ -147,7 +145,7 @@ fn convert_int_error(e: &std::num::IntErrorKind, invalid_fmt_err: LexErr, overfl
         _ => LexErr::UnknownIntErr,
     }
 }
-fn parse_unsigned_dec(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
+fn lex_unsigned_dec(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
     let mut string = lx.slice();
     if lx.slice().starts_with('#') {
         string = &string[1..];
@@ -157,7 +155,7 @@ fn parse_unsigned_dec(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
         .map_err(|e| convert_int_error(e.kind(), LexErr::InvalidNumeric, LexErr::DoesNotFitU16))
 }
 
-fn parse_signed_dec(lx: &Lexer<'_, Token>) -> Result<i16, LexErr> {
+fn lex_signed_dec(lx: &Lexer<'_, Token>) -> Result<i16, LexErr> {
     let mut string = lx.slice();
     if lx.slice().starts_with('#') {
         string = &string[1..];
@@ -166,7 +164,7 @@ fn parse_signed_dec(lx: &Lexer<'_, Token>) -> Result<i16, LexErr> {
     string.parse::<i16>()
         .map_err(|e| convert_int_error(e.kind(), LexErr::InvalidNumeric, LexErr::DoesNotFitI16))
 }
-fn parse_unsigned_hex(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
+fn lex_unsigned_hex(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
     let Some(hex) = lx.slice().strip_prefix(['X', 'x']) else {
         unreachable!("Lexer slice should have contained an X or x");
     };
@@ -174,7 +172,7 @@ fn parse_unsigned_hex(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
     u16::from_str_radix(hex, 16)
         .map_err(|e| convert_int_error(e.kind(), LexErr::InvalidNumeric, LexErr::DoesNotFitU16))
 }
-fn parse_signed_hex(lx: &Lexer<'_, Token>) -> Result<i16, LexErr> {
+fn lex_signed_hex(lx: &Lexer<'_, Token>) -> Result<i16, LexErr> {
     let Some(hex) = lx.slice().strip_prefix(['X', 'x']) else {
         unreachable!("Lexer slice should have contained an X or x");
     };
@@ -182,13 +180,13 @@ fn parse_signed_hex(lx: &Lexer<'_, Token>) -> Result<i16, LexErr> {
     i16::from_str_radix(hex, 16)
         .map_err(|e| convert_int_error(e.kind(), LexErr::InvalidNumeric, LexErr::DoesNotFitI16))
 }
-fn parse_reg(lx: &Lexer<'_, Token>) -> u8 {
+fn lex_reg(lx: &Lexer<'_, Token>) -> u8 {
     let regno = lx.slice()[1..].parse()
-        .unwrap_or_else(|_| unreachable!("parse_reg should only be called with register 0-7"));
+        .unwrap_or_else(|_| unreachable!("lex_reg should only be called with register 0-7"));
 
     regno
 }
-fn parse_str_literal(lx: &Lexer<'_, Token>) -> String {
+fn lex_str_literal(lx: &Lexer<'_, Token>) -> String {
     // get the string inside quotes:
     let mut remaining = &lx.slice()[1..(lx.slice().len() - 1)];
     let mut buf = String::with_capacity(remaining.len());
