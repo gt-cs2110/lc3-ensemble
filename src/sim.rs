@@ -5,6 +5,8 @@
 //! This module consists of:
 //! - [`Simulator`]: The struct that simulates assembled code.
 //! - [`Word`]: A mutable memory location.
+use std::ops::Range;
+
 use crate::asm::ObjectFile;
 use crate::ast::sim::SimInstr;
 use crate::ast::Reg;
@@ -15,8 +17,16 @@ pub enum SimErr {
     InvalidOpcode,
     /// Word was decoded, and the opcode is recognized,
     /// but the instruction's format is invalid.
-    InvalidInstrFormat
+    InvalidInstrFormat,
+    /// A privileged instruction was called in user mode.
+    PrivilegeViolation,
+    /// A supervisor region was accessed in user mode.
+    AccessViolation,
+    /// Not an error, but HALT!
+    ProgramHalted
 }
+
+const USER_RANGE: Range<u16> = 0x3000..0xFE00;
 
 /// Executes assembled code.
 #[derive(Debug)]
@@ -25,9 +35,15 @@ pub struct Simulator {
     reg_file: [Word; 8],
     /// The program counter.
     pc: u16,
-    /// Condition codes
-    // FIXME: upgrade this to the PSR
-    cc: u8,
+    /// The processor status register.
+    /// 
+    /// - `PSR[15..16]`: Privilege mode (0 = supervisor, 1 = user)
+    /// - `PSR[8..11]`:  Interrupt priority
+    /// - `PSR[0..3]`:   Condition codes
+    psr: u16,
+
+    /// Saved stack pointer (the one currently not in use)
+    saved_sp: Word,
 
     /// The number of subroutines or trap calls we've entered.
     /// 
@@ -48,7 +64,8 @@ impl Simulator {
             mem: std::array::from_fn(|_| Word::new_uninit()),
             reg_file: std::array::from_fn(|_| Word::new_uninit()),
             pc: 0x3000,
-            cc: 0b010,
+            psr: 0x8002,
+            saved_sp: Word::new_init(0x2FFF),
             sr_entered: 0
         }
     }
@@ -89,13 +106,76 @@ impl Simulator {
     
     /// Sets the condition codes using the provided result.
     fn set_cc(&mut self, result: u16) {
+        self.psr &= 0xFFF8;
         match (result as i16).cmp(&0) {
-            std::cmp::Ordering::Less    => self.cc = 0b100,
-            std::cmp::Ordering::Equal   => self.cc = 0b010,
-            std::cmp::Ordering::Greater => self.cc = 0b001,
+            std::cmp::Ordering::Less    => self.psr |= 0b100,
+            std::cmp::Ordering::Equal   => self.psr |= 0b010,
+            std::cmp::Ordering::Greater => self.psr |= 0b001,
         }
     }
+    /// Checks if the simulator is in privileged mode.
+    pub fn is_privileged(&self) -> bool {
+        (self.psr & 0x8000) == 0
+    }
 
+    /// Checks the PSR's priority.
+    pub fn priority(&self) -> u8 {
+        ((self.psr >> 8) & 0b111) as u8
+    }
+    
+    /// Sets the PC to the given address, raising any errors that occur.
+    pub fn set_pc(&mut self, addr: u16) -> Result<(), SimErr> {
+        // Check access violation
+        if !self.is_privileged() && !USER_RANGE.contains(&addr) {
+            return Err(SimErr::AccessViolation);
+        }
+
+        self.pc = addr;
+        Ok(())
+    }
+    /// Adds an offset to the PC.
+    pub fn offset_pc(&mut self, offset: i16) -> Result<(), SimErr> {
+        self.set_pc(self.pc.wrapping_add_signed(offset))
+    }
+
+    /// Interrupt, trap, and exception handler.
+    /// 
+    /// If priority is none, this will unconditionally initialize the trap or exception handler.
+    /// If priority is not none, this will run the interrupt handler only if the interrupt's priority
+    /// is greater than the PSR's priority.
+    /// 
+    /// The address provided is the address into the jump table (either the trap or interrupt vector ones).
+    /// This function will always jump to mem[vect] at the end of this function.
+    pub fn handle_interrupt(&mut self, vect: u16, priority: Option<u8>) -> Result<(), SimErr> {
+        if priority.is_some_and(|prio| prio <= self.priority()) { return Ok(()) };
+        if vect == 0x25 { return Err(SimErr::ProgramHalted) }; // HALT!
+        
+        if !self.is_privileged() {
+            std::mem::swap(&mut self.saved_sp, &mut self.reg_file[6]);
+        }
+
+        // Push PSR, PC to supervisor stack
+        let mut sp = self.reg_file[6];
+        let old_psr = self.psr;
+        let old_pc = self.pc;
+        
+        sp.set(sp.get_unsigned().wrapping_sub(1));
+        self.access_mem(sp.get_unsigned()).set(old_psr);
+        sp.set(sp.get_unsigned().wrapping_sub(1));
+        self.access_mem(sp.get_unsigned()).set(old_pc);
+        
+        self.psr &= 0x7FFF; // set privileged
+
+        // set interrupt priority
+        if let Some(prio) = priority {
+            self.psr &= !(0b111 << 8);
+            self.psr |= (prio as u16 & 0b111) << 8;
+        }
+
+        self.sr_entered += 1;
+        let addr = self.access_mem(vect).get_unsigned();
+        self.set_pc(addr)
+    }
     /// Start the simulator's execution.
     pub fn start(&mut self) -> Result<(), SimErr> {
         loop {
@@ -106,12 +186,12 @@ impl Simulator {
     pub fn step_in(&mut self) -> Result<(), SimErr> {
         let word = self.access_mem(self.pc).get_unsigned();
         let instr = SimInstr::decode(word)?;
-        self.pc += 1;
+        self.offset_pc(1)?;
 
         match instr {
             SimInstr::BR(cc, off)  => {
-                if cc & self.cc != 0 {
-                    self.pc = self.pc.wrapping_add_signed(off.get());
+                if (cc as u16) & self.psr & 0b111 != 0 {
+                    self.offset_pc(off.get())?;
                 }
             },
             SimInstr::ADD(dr, sr1, sr2) => {
@@ -144,9 +224,9 @@ impl Simulator {
                     crate::ast::ImmOrReg::Reg(br)  => self.access_reg(br).get_signed(),
                 };
 
-                self.reg_file[0b111].set(self.pc);
-                self.pc = self.pc.wrapping_add_signed(off);
+                self.reg_file[7].set(self.pc);
                 self.sr_entered += 1;
+                self.offset_pc(off)?;
             },
             SimInstr::AND(dr, sr1, sr2) => {
                 let val1 = self.access_reg(sr1).get_unsigned();
@@ -172,7 +252,27 @@ impl Simulator {
                 let val = *self.access_reg(sr);
                 self.access_mem(ea).copy_word(val);
             },
-            SimInstr::RTI => todo!("rti not yet implemented"),
+            SimInstr::RTI => {
+                if self.is_privileged() {
+                    let mut sp = self.reg_file[6];
+
+                    let pc = self.access_mem(sp.get_unsigned()).get_unsigned();
+                    sp.set(sp.get_unsigned().wrapping_add(1));
+                    let psr = self.access_mem(sp.get_unsigned()).get_unsigned();
+                    sp.set(sp.get_unsigned().wrapping_add(1));
+
+                    self.pc = pc;
+                    self.psr = psr;
+
+                    if !self.is_privileged() {
+                        std::mem::swap(&mut self.saved_sp, &mut self.reg_file[6]);
+                    }
+
+                    self.sr_entered = self.sr_entered.saturating_sub(1);
+                } else {
+                    return Err(SimErr::PrivilegeViolation);
+                }
+            },
             SimInstr::NOT(dr, sr) => {
                 let val1 = self.access_reg(sr).get_unsigned();
                 
@@ -194,21 +294,20 @@ impl Simulator {
                 self.access_mem(ea).copy_word(val);
             },
             SimInstr::JMP(br) => {
-                let off = self.access_reg(br).get_signed();
-                self.pc = self.pc.wrapping_add_signed(off);
-
+                let off = self.access_reg(br).get_unsigned();
                 // check for RET
                 if br.0 == 7 {
                     self.sr_entered = self.sr_entered.saturating_sub(1);
                 }
+
+                self.set_pc(off)?;
             },
             SimInstr::LEA(dr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
                 self.access_reg(dr).set(ea);
             },
             SimInstr::TRAP(vect) => {
-                self.pc = self.access_mem(vect.get()).get_unsigned();
-                self.sr_entered += 1;
+                self.handle_interrupt(vect.get(), None)?;
             },
         }
 
