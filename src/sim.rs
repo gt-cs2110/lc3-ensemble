@@ -5,14 +5,20 @@
 //! This module consists of:
 //! - [`Simulator`]: The struct that simulates assembled code.
 //! - [`Word`]: A mutable memory location.
+//! - [`WordArray`]: An array of memory locations, which can be indexed with non-usize types
+
+mod word;
+
 use std::ops::Range;
 
 use crate::asm::ObjectFile;
 use crate::ast::reg_consts::{R6, R7};
 use crate::ast::sim::SimInstr;
 use crate::ast::{ImmOrReg, Reg};
+pub use word::*;
 
 /// Errors that can occur during simulation.
+#[derive(Debug)]
 pub enum SimErr {
     /// Word was decoded, but the opcode was invalid.
     InvalidOpcode,
@@ -63,10 +69,12 @@ macro_rules! assert_init {
 #[derive(Debug)]
 pub struct Simulator {
     /// The simulator's memory.
-    pub mem: WordArray<u16, {2usize.pow(16)}>,
+    /// 
+    /// Note that this is held in the heap, as it is too large for the stack.
+    pub mem: WordArray<Box<[Word; 2usize.pow(16)]>, u16>,
 
     /// The simulator's register file.
-    pub reg_file: WordArray<Reg, 8>,
+    pub reg_file: WordArray<[Word; 8], Reg>,
 
     /// The program counter.
     pub pc: u16,
@@ -99,49 +107,6 @@ pub struct Simulator {
     strict: bool
 }
 
-/// Similar to type `[Word; _]`, but also allows indices of types smaller than usize.
-/// 
-/// This is used with the register file to make an array indexable with `Reg`,
-/// and with the memory to make an array indexable with `u16`.
-#[derive(Debug)]
-#[repr(transparent)]
-pub struct WordArray<I, const N: usize>([Word; N], std::marker::PhantomData<I>);
-impl<I: Into<usize>, const N: usize> WordArray<I, N> {
-    /// Creates a new word array with uninitialized memory.
-    pub fn new() -> Self {
-        Self(std::array::from_fn(|_| Word::new_uninit()), std::marker::PhantomData)
-    }
-}
-impl<I: Into<usize>, const N: usize> Default for WordArray<I, N> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-impl<I: Into<usize>, const N: usize> std::ops::Index<I> for WordArray<I, N> {
-    type Output = Word;
-
-    fn index(&self, index: I) -> &Self::Output {
-        &self.0[index.into()]
-    }
-}
-impl<I: Into<usize>, const N: usize> std::ops::IndexMut<I> for WordArray<I, N> {
-    fn index_mut(&mut self, index: I) -> &mut Self::Output {
-        &mut self.0[index.into()]
-    }
-}
-impl<I: Into<usize>, const N: usize> std::ops::Deref for WordArray<I, N> {
-    type Target = [Word];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl<I: Into<usize>, const N: usize> std::ops::DerefMut for WordArray<I, N> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 impl Simulator {
     /// Creates a new simulator, without any object files loaded.
     pub fn new() -> Self {
@@ -155,6 +120,7 @@ impl Simulator {
             strict: false
         }
     }
+
     /// Loads an object file into this simulator.
     pub fn load_obj_file(&mut self, obj: &ObjectFile) {
         for (&start, words) in obj.iter() {
@@ -429,237 +395,5 @@ impl Simulator {
 impl Default for Simulator {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// A memory location that can be read and written to.
-/// 
-/// # Reading
-/// 
-/// A word can be read as either an unsigned integer or a signed one.
-/// - [`Word::get_unsigned`] to read the word as unsigned
-/// - [`Word::get_signed`] to read the word as signed
-/// 
-/// # Writing
-/// 
-/// A word can be written into with a value or with another word.
-/// - [`Word::set`] to read a value into this word
-/// - [`Word::copy_word`] to read a word into this word
-/// 
-/// `copy_word` may be more useful in situations where initialization state may want to be preserved.
-/// See [`Word::set`] for more details.
-/// 
-/// Words can also be written to by applying assign operations (e.g., add, sub, and, etc.).
-/// All arithmetic operations that can be applied to words are assumed to be wrapping.
-/// See those implementations for more details.
-#[derive(Debug, Clone, Copy)]
-pub struct Word {
-    data: u16,
-    init: u16
-}
-
-const NO_BITS:  u16 = 0;
-const ALL_BITS: u16 = 1u16.wrapping_neg();
-impl Word {
-    /// Creates a new word that is considered uninitialized.
-    pub fn new_uninit() -> Self {
-        Self {
-            data: 0,
-            init: NO_BITS,
-        }
-    }
-    /// Creates a new word that is initialized with a given data value.
-    pub fn new_init(data: u16) -> Self {
-        Self {
-            data,
-            init: ALL_BITS,
-        }
-    }
-
-    /// Reads the word, returning its unsigned representation.
-    pub fn get_unsigned(&self) -> u16 {
-        self.data
-    }
-    /// Reads the word, returning its signed representation.
-    pub fn get_signed(&self) -> i16 {
-        self.data as i16
-    }
-
-    /// Checks that a word is fully initialized
-    pub fn is_init(&self) -> bool {
-        self.init == ALL_BITS
-    }
-
-    /// Writes to the word.
-    /// 
-    /// The data provided is assumed to be FULLY initialized,
-    /// and will set the initialization state of this word to be
-    /// fully initialized.
-    /// 
-    /// If the data is not fully initialized (e.g., if it is a partially initialized word),
-    /// [`Word::copy_word`] can be used instead.
-    pub fn set(&mut self, data: u16) {
-        self.data = data;
-        self.init = ALL_BITS;
-    }
-    /// Copies the data from one word into another.
-    /// 
-    /// This is useful for preserving initialization state.
-    pub fn copy_word(&mut self, word: Word) {
-        *self = word;
-    }
-}
-
-impl From<u16> for Word {
-    /// Creates a fully initialized word.
-    fn from(value: u16) -> Self {
-        Word::new_init(value)
-    }
-}
-impl From<i16> for Word {
-    /// Creates a fully initialized word.
-    fn from(value: i16) -> Self {
-        Word::new_init(value as u16)
-    }
-}
-
-/** NOT **/
-impl std::ops::Not for Word {
-    type Output = Word;
-
-    /// Inverts the data on this word, preserving any initialization state.
-    fn not(self) -> Self::Output {
-        // Initialization state should stay the same after this.
-        let Self { data, init } = self;
-        Self { data: !data, init }
-    }
-}
-
-/** ADD **/
-impl std::ops::Add for Word {
-    type Output = Word;
-
-    /// Adds two words together (wrapping if overflow occurs).
-    /// 
-    /// If the two words are fully initialized, 
-    /// the resulting word will also be fully initialized.
-    /// Otherwise, the resulting word is fully uninitialized.
-    fn add(self, rhs: Self) -> Self::Output {
-        let Self { data: ldata, init: linit } = self;
-        let Self { data: rdata, init: rinit } = rhs;
-
-        let data = ldata.wrapping_add(rdata);
-        // Very lazy initialization scheme.
-        // If both are fully init, consider this word fully init.
-        // Otherwise, consider it fully uninit.
-        let init = match linit == ALL_BITS && rinit == ALL_BITS {
-            true  => ALL_BITS,
-            false => NO_BITS,
-        };
-
-        Self { data, init }
-    }
-}
-impl std::ops::AddAssign for Word {
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs;
-    }
-}
-impl std::ops::AddAssign<u16> for Word {
-    /// Increments the word by the provided value.
-    /// 
-    /// If the word was fully initialized,
-    /// its updated value is also fully initialized.
-    /// Otherwise, the resulting word is fully uninitialized.
-    fn add_assign(&mut self, rhs: u16) {
-        *self = *self + Word::from(rhs);
-    }
-}
-impl std::ops::AddAssign<i16> for Word {
-    /// Increments the word by the provided value.
-    /// 
-    /// If the word was fully initialized,
-    /// its updated value is also fully initialized.
-    /// Otherwise, the resulting word is fully uninitialized.
-    fn add_assign(&mut self, rhs: i16) {
-        *self = *self + Word::from(rhs);
-    }
-}
-
-/** SUB **/
-impl std::ops::Sub for Word {
-    type Output = Word;
-
-    /// Subtracts two words together (wrapping if overflow occurs).
-    /// 
-    /// If the two words are fully initialized, 
-    /// the resulting word will also be fully initialized.
-    /// Otherwise, the resulting word is fully uninitialized.
-    fn sub(self, rhs: Self) -> Self::Output {
-        let Self { data: ldata, init: linit } = self;
-        let Self { data: rdata, init: rinit } = rhs;
-
-        let data = ldata.wrapping_sub(rdata);
-        // Very lazy initialization scheme.
-        // If both are fully init, consider this word fully init.
-        // Otherwise, consider it fully uninit.
-        let init = match linit == ALL_BITS && rinit == ALL_BITS {
-            true  => ALL_BITS,
-            false => NO_BITS,
-        };
-
-        Self { data, init }
-    }
-}
-impl std::ops::SubAssign for Word {
-    fn sub_assign(&mut self, rhs: Self) {
-        *self = *self - rhs;
-    }
-}
-impl std::ops::SubAssign<u16> for Word {
-    /// Decrements the word by the provided value.
-    /// 
-    /// If the word was fully initialized,
-    /// its updated value is also fully initialized.
-    /// Otherwise, the resulting word is fully uninitialized.
-    fn sub_assign(&mut self, rhs: u16) {
-        *self = *self - Word::new_init(rhs);
-    }
-}
-impl std::ops::SubAssign<i16> for Word {
-    /// Decrements the word by the provided value.
-    /// 
-    /// If the word was fully initialized,
-    /// its updated value is also fully initialized.
-    /// Otherwise, the resulting word is fully uninitialized.
-    fn sub_assign(&mut self, rhs: i16) {
-        *self = *self - Word::new_init(rhs as _);
-    }
-}
-
-/** AND **/
-impl std::ops::BitAnd for Word {
-    type Output = Word;
-
-    /// Applies a bitwise AND across two words.
-    /// 
-    /// This will also compute the correct initialization
-    /// for the resulting word, taking into account bit clearing.
-    fn bitand(self, rhs: Self) -> Self::Output {
-        let Self { data: ldata, init: linit } = self;
-        let Self { data: rdata, init: rinit } = rhs;
-
-        let data = ldata & rdata;
-        // A given bit of the result is init if:
-        // - both the lhs and rhs bits are init
-        // - either of the bits are data: 0, init: 1
-        let init = (linit & rinit) | (!ldata & linit) | (!rdata & rinit);
-
-        Self { data, init }
-    }
-}
-impl std::ops::BitAndAssign for Word {
-    fn bitand_assign(&mut self, rhs: Self) {
-        *self = *self & rhs;
     }
 }
