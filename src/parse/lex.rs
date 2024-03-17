@@ -1,8 +1,11 @@
-//! Tokenizer for LC-3 assembly.
+//! Tokenizing LC-3 assembly.
 //! 
 //! This module holds the tokens that characterize LC-3 assembly ([`Token`]).
 //! This module is used by the parser to facilitate the conversion of
 //! assembly source code into an AST.
+//! 
+//! The module's key data structure is the [`Token`] enum,
+//! which lists all of the tokens of LC-3 assembly.
 
 use std::num::IntErrorKind;
 
@@ -28,11 +31,13 @@ pub enum Token {
     #[regex(r"[Rr][0-7]", lex_reg)]
     Reg(u8),
 
-    /// An identifier. This can refer to either:
+    /// An identifier.
+    /// 
+    /// This can refer to either:
     /// - a label (e.g., `IF`, `WHILE`, `ENDIF`, `IF1`)
     /// - an instruction (e.g. `ADD`, `AND`, `NOT`)
     ///
-    /// This token type is case insensitive. 
+    /// This token type is case-insensitive. 
     #[regex(r"[A-Za-z_]\w*", |lx| lx.slice().parse::<Ident>().expect("should be infallible"))]
     Ident(Ident),
 
@@ -63,7 +68,9 @@ pub enum Token {
 
 macro_rules! ident_enum {
     ($($instr:ident),+) => {
-        /// An identifier. This can refer to either:
+        /// An identifier. 
+        /// 
+        /// This can refer to either:
         /// - a label (e.g., `IF`, `WHILE`, `ENDIF`, `IF1`)
         /// - an instruction (e.g. `ADD`, `AND`, `NOT`)
         ///
@@ -105,7 +112,7 @@ ident_enum! {
     RET, RTI, GETC, OUT, PUTC, PUTS, IN, PUTSP, HALT
 }
 
-/// Any errors raised in attempting to lex an input stream.
+/// Any errors raised in attempting to tokenize an input stream.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum LexErr {
     /// Numeric literal (unsigned dec, hex, and bin) cannot fit within the range of a u16

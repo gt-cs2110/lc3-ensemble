@@ -87,23 +87,23 @@ impl<OFF: std::fmt::UpperHex, const N: u32> std::fmt::UpperHex for Offset<OFF, N
 
 /// The errors that can result from calling `Offset::new`.
 #[derive(Debug, PartialEq, Eq)]
-pub enum OffsetNewError {
+pub enum OffsetNewErr {
     /// The provided offset cannot fit an unsigned integer of the given bitsize.
     CannotFitUnsigned(u32),
     /// The provided offset cannot fit a signed integer of the given bitsize.
     CannotFitSigned(u32)
 }
-impl std::fmt::Display for OffsetNewError {
+impl std::fmt::Display for OffsetNewErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OffsetNewError::CannotFitUnsigned(n) => write!(f, "value is too big for unsigned {n}-bit integer"),
-            OffsetNewError::CannotFitSigned(n) => write!(f, "value is too big for signed {n}-bit integer"),
+            OffsetNewErr::CannotFitUnsigned(n) => write!(f, "value is too big for unsigned {n}-bit integer"),
+            OffsetNewErr::CannotFitSigned(n) => write!(f, "value is too big for signed {n}-bit integer"),
         }
     }
 }
 
 mod offset_base {
-    use super::OffsetNewError;
+    use super::OffsetNewErr;
 
     /// Any type that could store a value for [`Offset`].
     /// 
@@ -121,7 +121,7 @@ mod offset_base {
 
         /// The error to raise if a given value doesn't match
         /// its provided value when truncated to a given `bit_size`.
-        fn does_not_fit_error(bit_size: u32) -> OffsetNewError;
+        fn does_not_fit_error(bit_size: u32) -> OffsetNewErr;
     }
     
     macro_rules! impl_offset_backing_for_ints {
@@ -134,8 +134,8 @@ mod offset_base {
                         (self << (Self::BITS - bit_size)) >> (Self::BITS - bit_size)
                     }
 
-                    fn does_not_fit_error(bit_size: u32) -> OffsetNewError {
-                        OffsetNewError::$Err(bit_size)
+                    fn does_not_fit_error(bit_size: u32) -> OffsetNewErr {
+                        OffsetNewErr::$Err(bit_size)
                     }
                 }
             )*
@@ -154,7 +154,7 @@ impl<OFF: OffsetBacking, const N: u32> Offset<OFF, N> {
     /// # Panics
     /// 
     /// This will panic if `N` is larger than the offset backing (e.g., for backing `u16`, larger than 16).
-    pub fn new(n: OFF) -> Result<Self, OffsetNewError> {
+    pub fn new(n: OFF) -> Result<Self, OffsetNewErr> {
         assert!(N <= OFF::BITS, "bit size {N} exceeds size of backing ({})", OFF::BITS);
         match n == n.truncate(N) {
             true  => Ok(Offset(n)),

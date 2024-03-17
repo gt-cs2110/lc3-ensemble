@@ -1,10 +1,13 @@
-//! This module contains all the information relating to parsing assembly code into
-//! an AST (of sorts).
+//! Parsing assembly source code into an AST.
+//! 
+//! This module is used to convert strings (which represent assembly source code)
+//! into abstract syntax trees that maintain all of the information of the source code
+//! in an easier to handle format.
 //! 
 //! The parser module consists of:
-//! - the implementation of the lexer/tokenizer (found in [`lex`]),
-//! - the main logic for the parser (found in [`Parser`]),
-//! - the implementation to "parse" a component (found in [`Parse`])
+//! - [`lex`]: the implementation of the lexer/tokenizer
+//! - [`Parser`]: the main logic for the parser
+//! - [`Parse`]: the implementation to "parse" an AST component
 
 pub mod lex;
 
@@ -18,6 +21,8 @@ use lex::{Ident, Token};
 use simple::*;
 
 /// Parses an assembly source code string into a `Vec` of statements.
+/// 
+/// This is a shortcut from repeatedly using the [`Parser`].
 pub fn parse_ast(s: &str) -> Result<Vec<Stmt>, ParseErr> {
     let mut parser = Parser::new(s)?;
     // Horrendous one-liner version of this:
@@ -45,11 +50,13 @@ impl std::fmt::Display for ParseErr {
     }
 }
 
-/// Trait that enables the parsing of tokens into a given component.
+/// Components that can be constructed from a sequence of tokens.
 pub trait Parse: Sized {
-    /// Attempt to convert the next set of tokens in the parser into a component.
+    /// Attempt to convert the next sequence of tokens 
+    /// in the parser's state into a component.
     /// 
-    /// This may consume input even if it fails.
+    /// If parsing fails, there are no guarantees about what happens to the input,
+    /// and the parser likely should not be used after an error is raised during parsing.
     fn parse(parser: &mut Parser) -> Result<Self, ParseErr>;
 }
 
@@ -61,7 +68,9 @@ pub struct Parser {
 impl Parser {
     /// Creates a new parser from a given string.
     /// 
-    /// This will try to lex it into tokens, raising an error if it fails.
+    /// In the instantiation process, 
+    /// this function will attempt to tokenize the string into tokens,
+    /// raising an error if it fails.
     pub fn new(stream: &str) -> Result<Self, ParseErr> {
         let tokens = Token::lexer(stream).spanned()
             .map(|(m_token, span)| match m_token {
@@ -93,7 +102,8 @@ impl Parser {
 
     /// Parses the current token stream into a component, erroring if not possible.
     /// 
-    /// This may consume tokens as a side effect.
+    /// If parsing fails, there are no guarantees about what happens to the input,
+    /// and the parser likely should not be used after an error is raised during parsing.
     pub fn parse<P: Parse>(&mut self) -> Result<P, ParseErr> {
         P::parse(self)
     }
@@ -150,7 +160,17 @@ impl<OFF, const N: u32> Parse for PCOffset<OFF, N>
     }
 }
 
-/// Module that holds tokens that are simple to parse.
+/// Simple to parse components.
+/// 
+/// This module holds components that are very simple to parse
+/// (defined as only requiring a single token and no additional state from the parser).
+/// 
+/// The key type of this module is the [`SimpleParse`] module which defines
+/// how to "simply parse" a component. 
+/// See that trait for more details about its utility over [`Parse`].
+/// 
+/// This module also provides several utility parsers (e.g., [`Comma`] and [`Colon`])
+/// for use in more complex component parsing.
 pub mod simple {
     use logos::Span;
 
@@ -159,10 +179,15 @@ pub mod simple {
     use super::lex::{Ident, LexErr, Token};
     use super::{Parse, ParseErr, Parser};
 
-    /// A trait marking all components that be parsed with a single token.
+    /// Components that can be constructed with a single token 
+    /// and require no additional parser state.
     /// 
     /// This has an advantage over [`Parse`] in that if parsing fails,
-    /// the parser is known to not advance its input.
+    /// the parser is known to not advance its input. 
+    /// This can be taken advantage of with [`Parser::match_`], 
+    /// which only advances if parsing passes.
+    /// 
+    /// [`Parser::match_`]: super::Parser::match_
     pub trait SimpleParse: Sized {
         /// Tries to parse the provided token as a component, erroring if not possible.
         fn try_parse(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr>;
