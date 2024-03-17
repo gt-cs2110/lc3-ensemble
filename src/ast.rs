@@ -9,9 +9,37 @@ use offset_base::OffsetBacking;
 /// A register. Must be between 0 and 7.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Reg(pub(crate) u8);
+
+/// Register constants!
+pub mod reg_consts {
+    use super::Reg;
+
+    /// The 0th register in the register file.
+    pub const R0: Reg = Reg(0);
+    /// The 1st register in the register file.
+    pub const R1: Reg = Reg(1);
+    /// The 2nd register in the register file.
+    pub const R2: Reg = Reg(2);
+    /// The 3rd register in the register file.
+    pub const R3: Reg = Reg(3);
+    /// The 4th register in the register file.
+    pub const R4: Reg = Reg(4);
+    /// The 5th register in the register file.
+    pub const R5: Reg = Reg(5);
+    /// The 6th register in the register file.
+    pub const R6: Reg = Reg(6);
+    /// The 7th register in the register file.
+    pub const R7: Reg = Reg(7);
+}
 impl std::fmt::Display for Reg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "R{}", self.0)
+    }
+}
+impl From<Reg> for usize {
+    // Used for indexing the reg file in [`ast::Sim`].
+    fn from(value: Reg) -> Self {
+        usize::from(value.0)
     }
 }
 
