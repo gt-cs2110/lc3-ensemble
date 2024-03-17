@@ -37,7 +37,9 @@ pub enum AsmErr {
     /// Creating the offset to replace a label caused overflow (pass 2).
     OffsetNewErr(OffsetNewErr),
     /// Label did not have an assigned address (pass 2).
-    CouldNotFindLabel
+    CouldNotFindLabel,
+    /// Block is way too large (pass 2).
+    ExcessiveBlock,
 }
 /// The symbol table created in the first assembler pass
 /// that maps each label to its corresponding address.
@@ -137,7 +139,7 @@ impl AsmInstr {
             AsmInstr::STI(sr, off)      => Ok(SimInstr::STI(sr, replace_pc_offset(off, lc, sym)?)),
             AsmInstr::STR(sr, br, off)  => Ok(SimInstr::STR(sr, br, off)),
             AsmInstr::TRAP(vect)        => Ok(SimInstr::TRAP(vect)),
-            AsmInstr::NOP               => Ok(SimInstr::BR(0b111, Offset::new_trunc(-1))),
+            AsmInstr::NOP               => Ok(SimInstr::BR(0b111, Offset::new_trunc(0))),
             AsmInstr::GETC              => Ok(SimInstr::TRAP(Offset::new_trunc(0x20))),
             AsmInstr::OUT               => Ok(SimInstr::TRAP(Offset::new_trunc(0x21))),
             AsmInstr::PUTC              => Ok(SimInstr::TRAP(Offset::new_trunc(0x21))),
@@ -283,13 +285,18 @@ impl ObjectFile {
     pub fn push(&mut self, start: u16, words: Vec<Word>) -> Result<(), AsmErr> {
         // Only add to object file if non-empty:
         if !words.is_empty() {
+            // Check block size to make sure block doesn't wrap around itself
+            if words.len() > (1 << u16::BITS) {
+                return Err(AsmErr::ExcessiveBlock);
+            }
+
             // Find previous block and ensure no overlap:
-            let prev_block = self.block_map.range(..start).next_back()
+            let prev_block = self.block_map.range(..=start).next_back()
                 .or_else(|| self.block_map.last_key_value());
 
-            if let Some((&addr, block_words)) = prev_block {
+            if let Some((&prev_start, prev_words)) = prev_block {
                 // check if this block overlaps with the previous block
-                if (start.wrapping_sub(addr) as usize) < block_words.len() {
+                if (start.wrapping_sub(prev_start) as usize) < prev_words.len() {
                     return Err(AsmErr::OverlappingBlocks);
                 }
             }
