@@ -1,10 +1,23 @@
-use crate::ast::sim::{ObjFile, SimInstr};
+//! Simulating and execution for LC-3 assembly.
+//! 
+//! This module is focused on executing fully assembled code (i.e., [`ObjectFile`]).
+//! 
+//! This module consists of:
+//! - [`Simulator`]: The struct that simulates assembled code.
+//! - [`Word`]: A mutable memory location.
+use crate::asm::ObjectFile;
+use crate::ast::sim::SimInstr;
 use crate::ast::Reg;
 
-struct Simulator {
+/// Executes assembled code.
+#[derive(Debug)]
+pub struct Simulator {
     mem: [Word; 2usize.pow(16)],
     reg_file: [Word; 8],
+    /// The program counter.
     pc: u16,
+    /// Condition codes
+    // FIXME: upgrade this to the PSR
     cc: u8,
 
     /// The number of subroutines or trap calls we've entered.
@@ -18,14 +31,10 @@ struct Simulator {
     /// I am hoping this is large enough that it doesn't overflow :)
     sr_entered: u64
 }
-#[derive(Clone, Copy)]
-pub(crate) struct Word {
-    data: u16,
-    init: bool 
-}
 
 impl Simulator {
-    fn new() -> Self {
+    /// Creates a new simulator, without any object files loaded.
+    pub fn new() -> Self {
         Self {
             mem: std::array::from_fn(|_| Word::new_uninit()),
             reg_file: std::array::from_fn(|_| Word::new_uninit()),
@@ -34,7 +43,8 @@ impl Simulator {
             sr_entered: 0
         }
     }
-    fn load_obj_file(&mut self, obj: &ObjFile) {
+    /// Loads an object file into this simulator.
+    pub fn load_obj_file(&mut self, obj: &ObjectFile) {
         for (&start, words) in obj.iter() {
             let end = start.wrapping_add(words.len() as u16);
             if start <= end {
@@ -50,14 +60,25 @@ impl Simulator {
             }
         }
     }
+    /// Wipes the simulator's state.
+    pub fn clear(&mut self) {
+        std::mem::take(self);
+    }
 
-    fn access_mem(&mut self, addr: u16) -> &mut Word {
+    /// Accesses a word in memory (allowing both reads and writes).
+    /// 
+    /// See [`Word`] for more details.
+    pub fn access_mem(&mut self, addr: u16) -> &mut Word {
         &mut self.mem[addr as usize]
     }
-    fn access_reg(&mut self, reg: Reg) -> &mut Word {
+    /// Accesses a word from a register (allowing both reads and writes).
+    /// 
+    /// See [`Word`] for more details.
+    pub fn access_reg(&mut self, reg: Reg) -> &mut Word {
         &mut self.reg_file[reg.0 as usize]
     }
     
+    /// Sets the condition codes using the provided result.
     fn set_cc(&mut self, result: u16) {
         match (result as i16).cmp(&0) {
             std::cmp::Ordering::Less    => self.cc = 0b100,
@@ -65,12 +86,15 @@ impl Simulator {
             std::cmp::Ordering::Greater => self.cc = 0b001,
         }
     }
-    fn start(&mut self) {
+
+    /// Start the simulator's execution.
+    pub fn start(&mut self) {
         loop {
             self.step_in();
         }
     }
-    fn step_in(&mut self) {
+    /// Perform one step through the simulator's execution.
+    pub fn step_in(&mut self) {
         let word = self.access_mem(self.pc).get_unsigned();
         let instr = SimInstr::decode(word);
         self.pc += 1;
@@ -94,16 +118,16 @@ impl Simulator {
             },
             SimInstr::LD(dr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
-
-                let val = self.access_mem(ea).get_unsigned();
-                self.access_reg(dr).set(val);
-                self.set_cc(val);
+                
+                let val = *self.access_mem(ea);
+                self.access_reg(dr).copy_word(val);
+                self.set_cc(val.get_unsigned());
             },
             SimInstr::ST(sr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
 
-                let val = self.access_reg(sr).get_unsigned();
-                self.access_mem(ea).set(val);
+                let val = *self.access_reg(sr);
+                self.access_mem(ea).copy_word(val);
             },
             SimInstr::JSR(op) => {
                 let off = match op {
@@ -129,15 +153,15 @@ impl Simulator {
             SimInstr::LDR(dr, br, off) => {
                 let ea = self.access_reg(br).get_unsigned().wrapping_add_signed(off.get());
 
-                let val = self.access_mem(ea).get_unsigned();
-                self.access_reg(dr).set(val);
-                self.set_cc(val);
+                let val = *self.access_mem(ea);
+                self.access_reg(dr).copy_word(val);
+                self.set_cc(val.get_unsigned());
             },
             SimInstr::STR(sr, br, off) => {
                 let ea = self.access_reg(br).get_unsigned().wrapping_add_signed(off.get());
                 
-                let val = self.access_reg(sr).get_unsigned();
-                self.access_mem(ea).set(val);
+                let val = *self.access_reg(sr);
+                self.access_mem(ea).copy_word(val);
             },
             SimInstr::RTI => todo!("rti not yet implemented"),
             SimInstr::NOT(dr, sr) => {
@@ -150,15 +174,15 @@ impl Simulator {
             SimInstr::LDI(dr, off) => {
                 let ea = self.access_mem(self.pc.wrapping_add_signed(off.get())).get_unsigned();
 
-                let val = self.access_mem(ea).get_unsigned();
-                self.access_reg(dr).set(val);
-                self.set_cc(val);
+                let val = *self.access_mem(ea);
+                self.access_reg(dr).copy_word(val);
+                self.set_cc(val.get_unsigned());
             },
             SimInstr::STI(sr, off) => {
                 let ea = self.access_mem(self.pc.wrapping_add_signed(off.get())).get_unsigned();
 
-                let val = self.access_reg(sr).get_unsigned();
-                self.access_mem(ea).set(val);
+                let val = *self.access_reg(sr);
+                self.access_mem(ea).copy_word(val);
             },
             SimInstr::JMP(br) => {
                 let off = self.access_reg(br).get_signed();
@@ -179,7 +203,8 @@ impl Simulator {
             },
         }
     }
-    fn step_over(&mut self) {
+    /// Perform one step through the simulator's execution, treating complete subroutines as one step.
+    pub fn step_over(&mut self) {
         let curr_frame = self.sr_entered;
         self.step_in();
         // step until we have landed back in the same frame
@@ -187,7 +212,8 @@ impl Simulator {
             self.step_in();
         }
     }
-    fn step_out(&mut self) {
+    /// Run through the simulator's execution until the subroutine is exited.
+    pub fn step_out(&mut self) {
         let curr_frame = self.sr_entered;
         self.step_in();
         // step until we get out of this frame
@@ -196,28 +222,65 @@ impl Simulator {
         }
     }
 }
+impl Default for Simulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A memory location that can be read and written to.
+/// 
+/// # Reading
+/// 
+/// A word can be read as either an unsigned integer or a signed one.
+/// - [`Word::get_unsigned`] to read the word as unsigned
+/// - [`Word::get_signed`] to read the word as signed
+/// 
+/// # Writing
+/// 
+/// A word can be written into with a value or with another word.
+/// - [`Word::set`] to read a value into this word
+/// - [`Word::copy_word`] to read a word into this word
+/// 
+/// `copy_word` may be more useful in situations where initialization state may want to be preserved.
+#[derive(Debug, Clone, Copy)]
+pub struct Word {
+    data: u16,
+    init: bool 
+}
 impl Word {
-    pub(crate) fn new_uninit() -> Self {
+    /// Creates a new word that is considered uninitialized.
+    pub fn new_uninit() -> Self {
         Self {
             data: 0,
             init: false,
         }
     }
-    pub(crate) fn new_init(data: u16) -> Self {
+    /// Creates a new word that is initialized with a given data value.
+    pub fn new_init(data: u16) -> Self {
         Self {
             data,
             init: true,
         }
     }
 
-    fn get_unsigned(&self) -> u16 {
+    /// Reads the word, returning its unsigned representation.
+    pub fn get_unsigned(&self) -> u16 {
         self.data
     }
-    fn get_signed(&self) -> i16 {
+    /// Reads the word, returning its signed representation.
+    pub fn get_signed(&self) -> i16 {
         self.data as i16
     }
-    fn set(&mut self, word: u16) {
-        self.data = word;
+    /// Writes to the word.
+    pub fn set(&mut self, data: u16) {
+        self.data = data;
         self.init = true;
+    }
+    /// Copies the data from one word into another.
+    /// 
+    /// This is useful for preserving initialization state.
+    pub fn copy_word(&mut self, word: Word) {
+        *self = word;
     }
 }

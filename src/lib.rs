@@ -3,5 +3,6 @@
 #![warn(missing_docs)]
 
 pub mod parse;
-mod sim;
 pub mod ast;
+pub mod asm;
+pub mod sim;

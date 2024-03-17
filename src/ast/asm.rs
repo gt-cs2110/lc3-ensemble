@@ -1,16 +1,16 @@
-//! This module is used for holding simulation instructions ([`Self`]),
-//! which are instructions that directly map to assembly code.
+//! This module holds the AST for statements from assembly source code.
 //! 
-//! For instructions that map bytecode, see [`sim::SimInstr`].
+//! For instructions that map to bytecode instructions, see [`sim::SimInstr`].
+//! 
+//! Useful structs in this module include:
+//! - [`AsmInstr`]: An enum of all possible assembly source code instructions
+//! - [`Directive`]: An enum of all possible assembly source code directives
+//! - [`Stmt`]: The format for a single "statement" in assembly source code
 //! 
 //! [`sim::SimInstr`]: [`crate::ast::sim::SimInstr`]
-
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use super::sim::{ObjFile, SimBlock, SimInstr};
-use super::{CondCode, IOffset, ImmOrReg, Offset, OffsetNewError, PCOffset, Reg, TrapVect8};
+use super::{CondCode, IOffset, ImmOrReg, Offset, PCOffset, Reg, TrapVect8};
 
 
 type PCOffset9 = PCOffset<i16, 9>;
@@ -23,6 +23,7 @@ type PCOffset11 = PCOffset<i16, 11>;
 /// For instructions that map to typeable assembly code, refer to [`sim::SimInstr`].
 /// 
 /// [`sim::SimInstr`]: [`crate::ast::sim::SimInstr`]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum AsmInstr {
     /// An ADD instruction.
     /// 
@@ -349,52 +350,8 @@ impl std::fmt::Display for AsmInstr {
     }
 }
 
-/// Replaces a PCOffset value with an Offset value by calculating the offset from a given label (if this PCOffset represents a label).
-fn replace_pc_offset<const N: u32>(off: PCOffset<i16, N>, lc: u16, sym: &SymbolTable) -> Result<Offset<i16, N>, AsmError> {
-    match off {
-        PCOffset::Offset(off) => Ok(off),
-        PCOffset::Label(label) => {
-            let Some(loc) = sym.get(&label) else { return Err(AsmError::CouldNotFindLabel) };
-            Offset::new(loc.wrapping_sub(lc) as i16)
-                .map_err(AsmError::OffsetNewError)
-        },
-    }
-}
-impl AsmInstr {
-    /// Converts an ASM instruction into a simulator instruction ([`SimInstr`])
-    /// by resolving offsets and erasing aliases.
-    pub fn into_sim_instr(self, lc: u16, sym: &SymbolTable) -> Result<SimInstr, AsmError> {
-        match self {
-            AsmInstr::ADD(dr, sr1, sr2) => Ok(SimInstr::ADD(dr, sr1, sr2)),
-            AsmInstr::AND(dr, sr1, sr2) => Ok(SimInstr::AND(dr, sr1, sr2)),
-            AsmInstr::BR(cc, off)       => Ok(SimInstr::BR(cc, replace_pc_offset(off, lc, sym)?)),
-            AsmInstr::JMP(br)           => Ok(SimInstr::JMP(br)),
-            AsmInstr::JSR(off)          => Ok(SimInstr::JSR(ImmOrReg::Imm(replace_pc_offset(off, lc, sym)?))),
-            AsmInstr::JSRR(br)          => Ok(SimInstr::JSR(ImmOrReg::Reg(br))),
-            AsmInstr::LD(dr, off)       => Ok(SimInstr::LD(dr, replace_pc_offset(off, lc, sym)?)),
-            AsmInstr::LDI(dr, off)      => Ok(SimInstr::LDI(dr, replace_pc_offset(off, lc, sym)?)),
-            AsmInstr::LDR(dr, br, off)  => Ok(SimInstr::LDR(dr, br, off)),
-            AsmInstr::LEA(dr, off)      => Ok(SimInstr::LEA(dr, replace_pc_offset(off, lc, sym)?)),
-            AsmInstr::NOT(dr, sr)       => Ok(SimInstr::NOT(dr, sr)),
-            AsmInstr::RET               => Ok(SimInstr::JMP(Reg(0b111))),
-            AsmInstr::RTI               => Ok(SimInstr::RTI),
-            AsmInstr::ST(sr, off)       => Ok(SimInstr::ST(sr, replace_pc_offset(off, lc, sym)?)),
-            AsmInstr::STI(sr, off)      => Ok(SimInstr::STI(sr, replace_pc_offset(off, lc, sym)?)),
-            AsmInstr::STR(sr, br, off)  => Ok(SimInstr::STR(sr, br, off)),
-            AsmInstr::TRAP(vect)        => Ok(SimInstr::TRAP(vect)),
-            AsmInstr::NOP               => Ok(SimInstr::BR(0b111, Offset::new_trunc(-1))),
-            AsmInstr::GETC              => Ok(SimInstr::TRAP(Offset::new_trunc(0x20))),
-            AsmInstr::OUT               => Ok(SimInstr::TRAP(Offset::new_trunc(0x21))),
-            AsmInstr::PUTC              => Ok(SimInstr::TRAP(Offset::new_trunc(0x21))),
-            AsmInstr::PUTS              => Ok(SimInstr::TRAP(Offset::new_trunc(0x22))),
-            AsmInstr::IN                => Ok(SimInstr::TRAP(Offset::new_trunc(0x23))),
-            AsmInstr::PUTSP             => Ok(SimInstr::TRAP(Offset::new_trunc(0x24))),
-            AsmInstr::HALT              => Ok(SimInstr::TRAP(Offset::new_trunc(0x25))),
-        }
-    }
-}
-
 /// An enum representing all the possible directives in LC-3 assembly code.
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Directive {
     /// An `.orig` directive.
     /// 
@@ -465,33 +422,9 @@ impl std::fmt::Display for Directive {
         }
     }
 }
-impl Directive {
-    fn write_directive(self, labels: &SymbolTable, block: &mut SimBlock) -> Result<(), AsmError> {
-        match self {
-            Directive::Orig(_) => {},
-            Directive::Fill(pc_offset) => {
-                let off = match pc_offset {
-                    PCOffset::Offset(o) => o.get(),
-                    PCOffset::Label(l)  => labels.get(&l).ok_or(AsmError::CouldNotFindLabel)?,
-                };
-
-                block.push(off);
-            },
-            Directive::Blkw(n) => {
-                block.shift(n.get());
-            },
-            Directive::Stringz(n) => {
-                block.extend(n.bytes().map(u16::from));
-                block.push(0);
-            },
-            Directive::End => {},
-        };
-
-        Ok(())
-    }
-}
 
 /// Either an instruction or a directive.
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum StmtKind {
     #[allow(missing_docs)]
     Instr(AsmInstr),
@@ -499,151 +432,15 @@ pub enum StmtKind {
     Directive(Directive)
 }
 
-/// An instruction or directive and the labels associated with them.
+/// A "statement" in LC-3 assembly.
+/// 
+/// While not a defined term in LC-3 assembly, 
+/// a statement here refers to either an instruction or a directive,
+/// and the labels that are associated with it.
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct Stmt {
     /// The labels.
     pub labels: Vec<String>,
     /// The instruction or directive.
     pub nucleus: StmtKind
-}
-
-/// Error from assembling given assembly code.
-pub enum AsmError {
-    /// Cannot determine address of label or instruction (pass 1 and 2).
-    CannotDetAddress,
-    /// There was an `.orig` but no corresponding `.end` (pass 1).
-    UnclosedOrig,
-    /// There was an `.end` but no corresonding `.orig` (pass 1).
-    UnopenedOrig,
-    /// There was an `.orig` opened after another `.orig` (pass 1).
-    OverlappingOrig,
-    /// There were multiple labels of the same name (pass 1).
-    OverlappingLabels,
-    /// There are blocks that overlap ranges of memory (pass 2).
-    OverlappingBlocks,
-    /// Creating the offset to replace a label caused overflow (pass 2).
-    OffsetNewError(OffsetNewError),
-    /// Label did not have an assigned address (pass 2).
-    CouldNotFindLabel
-}
-/// The symbol table created in the first assembler pass
-/// that maps each label to its corresponding address.
-pub struct SymbolTable {
-    /// A mapping from label to address.
-    labels: HashMap<String, u16>
-}
-
-impl SymbolTable {
-    /// Creates a new symbol table (performing the first assembler pass)
-    /// by reading through the statements and computing label addresses.
-    pub fn new(stmts: &[Stmt]) -> Result<Self, AsmError> {
-        let mut lc: Option<u16> = None;
-        let mut labels = HashMap::new();
-
-        for stmt in stmts {
-            // Add labels if they exist
-            if !stmt.labels.is_empty() {
-                let Some(addr) = lc else { return Err(AsmError::CannotDetAddress) };
-
-                for label in &stmt.labels {
-                    match labels.entry(label.to_string()) {
-                        Entry::Occupied(_) => return Err(AsmError::OverlappingLabels),
-                        Entry::Vacant(e) => e.insert(addr),
-                    };
-                }
-                labels.extend({
-                    stmt.labels.iter()
-                        .map(|label| (label.to_uppercase(), addr))
-                });
-            }
-
-            lc = match &stmt.nucleus {
-                StmtKind::Instr(_) => lc.map(|addr| addr.wrapping_add(1)),
-                StmtKind::Directive(d) => match d {
-                    Directive::Orig(addr) => match lc {
-                        Some(_) => return Err(AsmError::OverlappingOrig),
-                        None => Some(addr.get())
-                    },
-                    Directive::Fill(_) => lc.map(|addr| addr.wrapping_add(1)),
-                    Directive::Blkw(n) => lc.map(|addr| addr.wrapping_add(n.get())),
-                    Directive::Stringz(s) => lc.map(|addr| addr.wrapping_add(s.len() as u16).wrapping_add(1)),
-                    Directive::End => match lc {
-                        Some(_) => None,
-                        None => return Err(AsmError::UnopenedOrig)
-                    },
-                },
-            };
-        }
-
-        match lc {
-            None    => Ok(SymbolTable { labels }),
-            Some(_) => Err(AsmError::UnclosedOrig),
-        }
-    }
-
-    /// Gets the address of a given label (if it exists).
-    pub fn get(&self, label: &str) -> Option<u16> {
-        self.labels.get(&label.to_uppercase()).cloned()
-    }
-}
-
-/// The assembler! Converts assembly statements into bytecode.
-pub struct Assembler {
-    /// The statements to convert.
-    stmts: Vec<Stmt>,
-    /// The symbol table of the statements (computed on initialization)
-    sym: SymbolTable,
-    /// The object file produced as a result
-    obj: ObjFile
-}
-impl Assembler {
-    /// Creates a new assembler (and runs the first pass).
-    pub fn new(stmts: Vec<Stmt>) -> Result<Self, AsmError> {
-        let sym = SymbolTable::new(&stmts)?;
-        Ok(Self { stmts, sym, obj: ObjFile::new() })
-    }
-
-    /// Creates the object file (and returns any errors that result from it)
-    pub fn prepare_obj_file(&mut self) -> Result<(), AsmError> {
-        // Holding both the LC and currently writing block
-        let mut current: Option<(u16, SimBlock)> = None;
-
-        for stmt in std::mem::take(&mut self.stmts) {
-            if let Some((lc, _)) = current.as_mut() {
-                *lc = lc.wrapping_add(1);
-            }
-
-            match stmt.nucleus {
-                StmtKind::Directive(Directive::Orig(off)) => {
-                    // Add new working block.
-                    debug_assert!(current.is_none());
-                    let addr = off.get();
-                    current.replace((addr, SimBlock { start: addr, words: vec![] }));
-                },
-                StmtKind::Directive(Directive::End) => {
-                    // Take out the current working block and put it into completed blocks.
-                    let Some((_, block)) = current.take() else {
-                        return Err(AsmError::UnopenedOrig); // unreachable (because pass 1 should've found it)
-                    };
-                    self.obj.push(block)?;
-                },
-                StmtKind::Directive(directive) => {
-                    let Some((_, block)) = &mut current else { return Err(AsmError::CannotDetAddress) };
-                    directive.write_directive(&self.sym, block)?;
-                },
-                StmtKind::Instr(instr) => {
-                    let Some((lc, block)) = &mut current else { return Err(AsmError::CannotDetAddress) };
-                    let sim = instr.into_sim_instr(*lc, &self.sym)?;
-                    block.push(sim.encode());
-                },
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Gets the produced object file.
-    pub fn unwrap(self) -> ObjFile {
-        self.obj
-    }
 }
