@@ -35,7 +35,7 @@ impl Simulator {
         }
     }
     fn load_obj_file(&mut self, obj: &ObjFile) {
-        for (&start, words) in &obj.block_map {
+        for (&start, words) in obj.iter() {
             let end = start.wrapping_add(words.len() as u16);
             if start <= end {
                 // contiguous copy

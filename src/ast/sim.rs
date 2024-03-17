@@ -10,7 +10,8 @@ use std::ops::Range;
 
 use crate::sim::Word;
 
-use super::{CondCode, IOffset, ImmOrReg, OffsetNewError, Reg, TrapVect8};
+use super::asm::AsmError;
+use super::{CondCode, IOffset, ImmOrReg, Reg, TrapVect8};
 
 const OP_BR: u16   = 0b0000; 
 const OP_ADD: u16  = 0b0001; 
@@ -341,12 +342,6 @@ fn join_bits<const N: usize>(bits: [(u16, Range<usize>); N]) -> u16 {
         .fold(0, std::ops::BitOr::bitor)
 }
 
-pub enum CodegenError {
-    OverlappingBlocks,
-    OffsetNewError(OffsetNewError),
-    CouldNotFindLabel,
-    CannotDetAddress,
-}
 pub struct SimBlock {
     pub(crate) start: u16,
     pub(crate) words: Vec<Word>
@@ -368,28 +363,44 @@ impl Extend<u16> for SimBlock {
     }
 }
 pub struct ObjFile {
-    pub(crate) block_map: BTreeMap<u16, Vec<Word>>
+    block_map: BTreeMap<u16, Vec<Word>>
 }
 impl ObjFile {
-    fn new(blocks: Vec<SimBlock>) -> Result<Self, CodegenError> {
-        let mut block_map: BTreeMap<u16, Vec<_>> = BTreeMap::new();
+    pub fn new() -> Self {
+        ObjFile {
+            block_map: BTreeMap::new()
+        }
+    }
 
-        for SimBlock { start, words } in blocks {
-            if words.is_empty() { continue; }
+    pub fn push(&mut self, block: SimBlock) -> Result<(), AsmError> {
+        let SimBlock { start, words } = block;
 
-            let prev_block = block_map.range(..start).next_back()
-                .or_else(|| block_map.last_key_value());
+        // Only add to object file if non-empty:
+        if !words.is_empty() {
+            // Find previous block and ensure no overlap:
+            let prev_block = self.block_map.range(..start).next_back()
+                .or_else(|| self.block_map.last_key_value());
 
             if let Some((&addr, block_words)) = prev_block {
                 // check if this block overlaps with the previous block
                 if (start.wrapping_sub(addr) as usize) < block_words.len() {
-                    return Err(CodegenError::OverlappingBlocks);
+                    return Err(AsmError::OverlappingBlocks);
                 }
             }
 
-            block_map.insert(start, words);
+            // No overlap, so we can add it:
+            self.block_map.insert(start, words);
         }
 
-        Ok(ObjFile { block_map })
+        Ok(())
+    }
+
+    pub fn iter(&self) -> std::collections::btree_map::Iter<'_, u16, Vec<Word>> {
+        self.block_map.iter()
+    }
+}
+impl Default for ObjFile {
+    fn default() -> Self {
+        Self::new()
     }
 }

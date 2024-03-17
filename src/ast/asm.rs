@@ -9,8 +9,8 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use super::sim::{CodegenError, SimBlock, SimInstr};
-use super::{CondCode, IOffset, ImmOrReg, Offset, PCOffset, Reg, TrapVect8};
+use super::sim::{ObjFile, SimBlock, SimInstr};
+use super::{CondCode, IOffset, ImmOrReg, Offset, OffsetNewError, PCOffset, Reg, TrapVect8};
 
 
 type PCOffset9 = PCOffset<i16, 9>;
@@ -348,8 +348,22 @@ impl std::fmt::Display for AsmInstr {
         }
     }
 }
+
+/// Replaces a PCOffset value with an Offset value by calculating the offset from a given label (if this PCOffset represents a label).
+fn replace_pc_offset<const N: u32>(off: PCOffset<i16, N>, lc: u16, sym: &SymbolTable) -> Result<Offset<i16, N>, AsmError> {
+    match off {
+        PCOffset::Offset(off) => Ok(off),
+        PCOffset::Label(label) => {
+            let Some(loc) = sym.get(&label) else { return Err(AsmError::CouldNotFindLabel) };
+            Offset::new(loc.wrapping_sub(lc) as i16)
+                .map_err(AsmError::OffsetNewError)
+        },
+    }
+}
 impl AsmInstr {
-    fn into_sim_instr(self, lc: u16, sym: &SymbolTable) -> Result<SimInstr, CodegenError> {
+    /// Converts an ASM instruction into a simulator instruction ([`SimInstr`])
+    /// by resolving offsets and erasing aliases.
+    pub fn into_sim_instr(self, lc: u16, sym: &SymbolTable) -> Result<SimInstr, AsmError> {
         match self {
             AsmInstr::ADD(dr, sr1, sr2) => Ok(SimInstr::ADD(dr, sr1, sr2)),
             AsmInstr::AND(dr, sr1, sr2) => Ok(SimInstr::AND(dr, sr1, sr2)),
@@ -452,13 +466,13 @@ impl std::fmt::Display for Directive {
     }
 }
 impl Directive {
-    fn write_directive(self, labels: &SymbolTable, block: &mut SimBlock) -> Result<(), CodegenError> {
+    fn write_directive(self, labels: &SymbolTable, block: &mut SimBlock) -> Result<(), AsmError> {
         match self {
             Directive::Orig(_) => {},
             Directive::Fill(pc_offset) => {
                 let off = match pc_offset {
                     PCOffset::Offset(o) => o.get(),
-                    PCOffset::Label(l)  => labels.get(&l).ok_or(CodegenError::CouldNotFindLabel)?,
+                    PCOffset::Label(l)  => labels.get(&l).ok_or(AsmError::CouldNotFindLabel)?,
                 };
 
                 block.push(off);
@@ -493,37 +507,47 @@ pub struct Stmt {
     pub nucleus: StmtKind
 }
 
-/// The symbol table that maps each label to its corresponding address.
+/// Error from assembling given assembly code.
+pub enum AsmError {
+    /// Cannot determine address of label or instruction (pass 1 and 2).
+    CannotDetAddress,
+    /// There was an `.orig` but no corresponding `.end` (pass 1).
+    UnclosedOrig,
+    /// There was an `.end` but no corresonding `.orig` (pass 1).
+    UnopenedOrig,
+    /// There was an `.orig` opened after another `.orig` (pass 1).
+    OverlappingOrig,
+    /// There were multiple labels of the same name (pass 1).
+    OverlappingLabels,
+    /// There are blocks that overlap ranges of memory (pass 2).
+    OverlappingBlocks,
+    /// Creating the offset to replace a label caused overflow (pass 2).
+    OffsetNewError(OffsetNewError),
+    /// Label did not have an assigned address (pass 2).
+    CouldNotFindLabel
+}
+/// The symbol table created in the first assembler pass
+/// that maps each label to its corresponding address.
 pub struct SymbolTable {
+    /// A mapping from label to address.
     labels: HashMap<String, u16>
 }
 
-/// Error from creating the symbol table.
-pub enum PassError {
-    /// Cannot determine address of label.
-    CannotDetAddress,
-    /// There was an `.orig` but no corresponding `.end`.
-    UnclosedOrig,
-    /// There was an `.end` but no corresonding `.orig`.
-    UnopenedOrig,
-    /// There was an `.orig` opened after another `.orig`.
-    OverlappingOrig,
-    /// There were multiple labels of the same name.
-    OverlappingLabels
-}
 impl SymbolTable {
-    fn new(stmts: &[Stmt]) -> Result<Self, PassError> {
+    /// Creates a new symbol table (performing the first assembler pass)
+    /// by reading through the statements and computing label addresses.
+    pub fn new(stmts: &[Stmt]) -> Result<Self, AsmError> {
         let mut lc: Option<u16> = None;
         let mut labels = HashMap::new();
 
         for stmt in stmts {
             // Add labels if they exist
             if !stmt.labels.is_empty() {
-                let Some(addr) = lc else { return Err(PassError::CannotDetAddress) };
+                let Some(addr) = lc else { return Err(AsmError::CannotDetAddress) };
 
                 for label in &stmt.labels {
                     match labels.entry(label.to_string()) {
-                        Entry::Occupied(_) => return Err(PassError::OverlappingLabels),
+                        Entry::Occupied(_) => return Err(AsmError::OverlappingLabels),
                         Entry::Vacant(e) => e.insert(addr),
                     };
                 }
@@ -537,7 +561,7 @@ impl SymbolTable {
                 StmtKind::Instr(_) => lc.map(|addr| addr.wrapping_add(1)),
                 StmtKind::Directive(d) => match d {
                     Directive::Orig(addr) => match lc {
-                        Some(_) => return Err(PassError::OverlappingOrig),
+                        Some(_) => return Err(AsmError::OverlappingOrig),
                         None => Some(addr.get())
                     },
                     Directive::Fill(_) => lc.map(|addr| addr.wrapping_add(1)),
@@ -545,7 +569,7 @@ impl SymbolTable {
                     Directive::Stringz(s) => lc.map(|addr| addr.wrapping_add(s.len() as u16).wrapping_add(1)),
                     Directive::End => match lc {
                         Some(_) => None,
-                        None => return Err(PassError::UnopenedOrig)
+                        None => return Err(AsmError::UnopenedOrig)
                     },
                 },
             };
@@ -553,60 +577,73 @@ impl SymbolTable {
 
         match lc {
             None    => Ok(SymbolTable { labels }),
-            Some(_) => Err(PassError::UnclosedOrig),
+            Some(_) => Err(AsmError::UnclosedOrig),
         }
     }
 
-    fn get(&self, label: &str) -> Option<u16> {
+    /// Gets the address of a given label (if it exists).
+    pub fn get(&self, label: &str) -> Option<u16> {
         self.labels.get(&label.to_uppercase()).cloned()
     }
 }
 
-fn replace_pc_offset<const N: u32>(off: PCOffset<i16, N>, lc: u16, sym: &SymbolTable) -> Result<Offset<i16, N>, CodegenError> {
-    match off {
-        PCOffset::Offset(off) => Ok(off),
-        PCOffset::Label(label) => {
-            let Some(loc) = sym.get(&label) else { return Err(CodegenError::CouldNotFindLabel) };
-            Offset::new(loc.wrapping_sub(lc) as i16)
-                .map_err(CodegenError::OffsetNewError)
-        },
-    }
+/// The assembler! Converts assembly statements into bytecode.
+pub struct Assembler {
+    /// The statements to convert.
+    stmts: Vec<Stmt>,
+    /// The symbol table of the statements (computed on initialization)
+    sym: SymbolTable,
+    /// The object file produced as a result
+    obj: ObjFile
 }
-
-fn create_sim_blocks(stmts: Vec<Stmt>, sym: &SymbolTable) -> Result<Vec<SimBlock>, CodegenError> {
-    // Holding both the LC and currently writing block
-    let mut current: Option<(u16, SimBlock)> = None;
-    // Holding all blocks that have been written to
-    let mut blocks = vec![];
-
-    for stmt in stmts {
-        if let Some((lc, _)) = current.as_mut() {
-            *lc = lc.wrapping_add(1);
-        }
-
-        match stmt.nucleus {
-            StmtKind::Directive(Directive::Orig(off)) => {
-                // Add new working block.
-                debug_assert!(current.is_none());
-                let addr = off.get();
-                current.replace((addr, SimBlock { start: addr, words: vec![] }));
-            },
-            StmtKind::Directive(Directive::End) => {
-                // Take out the current working block and put it into completed blocks.
-                let Some((_, block)) = current.take() else { unreachable!("pass 1 verified valid .orig/.end pairs") };
-                blocks.push(block);
-            },
-            StmtKind::Directive(directive) => {
-                let Some((_, block)) = &mut current else { return Err(CodegenError::CannotDetAddress) };
-                directive.write_directive(sym, block)?;
-            },
-            StmtKind::Instr(instr) => {
-                let Some((lc, block)) = &mut current else { return Err(CodegenError::CannotDetAddress) };
-                let sim = instr.into_sim_instr(*lc, sym)?;
-                block.push(sim.encode());
-            },
-        }
+impl Assembler {
+    /// Creates a new assembler (and runs the first pass).
+    pub fn new(stmts: Vec<Stmt>) -> Result<Self, AsmError> {
+        let sym = SymbolTable::new(&stmts)?;
+        Ok(Self { stmts, sym, obj: ObjFile::new() })
     }
 
-    Ok(blocks)
+    /// Creates the object file (and returns any errors that result from it)
+    pub fn prepare_obj_file(&mut self) -> Result<(), AsmError> {
+        // Holding both the LC and currently writing block
+        let mut current: Option<(u16, SimBlock)> = None;
+
+        for stmt in std::mem::take(&mut self.stmts) {
+            if let Some((lc, _)) = current.as_mut() {
+                *lc = lc.wrapping_add(1);
+            }
+
+            match stmt.nucleus {
+                StmtKind::Directive(Directive::Orig(off)) => {
+                    // Add new working block.
+                    debug_assert!(current.is_none());
+                    let addr = off.get();
+                    current.replace((addr, SimBlock { start: addr, words: vec![] }));
+                },
+                StmtKind::Directive(Directive::End) => {
+                    // Take out the current working block and put it into completed blocks.
+                    let Some((_, block)) = current.take() else {
+                        return Err(AsmError::UnopenedOrig); // unreachable (because pass 1 should've found it)
+                    };
+                    self.obj.push(block)?;
+                },
+                StmtKind::Directive(directive) => {
+                    let Some((_, block)) = &mut current else { return Err(AsmError::CannotDetAddress) };
+                    directive.write_directive(&self.sym, block)?;
+                },
+                StmtKind::Instr(instr) => {
+                    let Some((lc, block)) = &mut current else { return Err(AsmError::CannotDetAddress) };
+                    let sim = instr.into_sim_instr(*lc, &self.sym)?;
+                    block.push(sim.encode());
+                },
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Gets the produced object file.
+    pub fn unwrap(self) -> ObjFile {
+        self.obj
+    }
 }
