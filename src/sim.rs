@@ -105,9 +105,9 @@ impl Simulator {
     }
     
     /// Sets the condition codes using the provided result.
-    fn set_cc(&mut self, result: u16) {
+    fn set_cc(&mut self, result: i16) {
         self.psr &= 0xFFF8;
-        match (result as i16).cmp(&0) {
+        match result.cmp(&0) {
             std::cmp::Ordering::Less    => self.psr |= 0b100,
             std::cmp::Ordering::Equal   => self.psr |= 0b010,
             std::cmp::Ordering::Greater => self.psr |= 0b001,
@@ -203,14 +203,14 @@ impl Simulator {
 
                 let result = val1.wrapping_add_signed(val2);
                 self.access_reg(dr).set(result);
-                self.set_cc(result);
+                self.set_cc(result as i16);
             },
             SimInstr::LD(dr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
                 
                 let val = *self.access_mem(ea);
                 self.access_reg(dr).copy_word(val);
-                self.set_cc(val.get_unsigned());
+                self.set_cc(val.get_signed());
             },
             SimInstr::ST(sr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
@@ -237,14 +237,14 @@ impl Simulator {
 
                 let result = val1 & val2;
                 self.access_reg(dr).set(result);
-                self.set_cc(result);
+                self.set_cc(result as i16);
             },
             SimInstr::LDR(dr, br, off) => {
                 let ea = self.access_reg(br).get_unsigned().wrapping_add_signed(off.get());
 
                 let val = *self.access_mem(ea);
                 self.access_reg(dr).copy_word(val);
-                self.set_cc(val.get_unsigned());
+                self.set_cc(val.get_signed());
             },
             SimInstr::STR(sr, br, off) => {
                 let ea = self.access_reg(br).get_unsigned().wrapping_add_signed(off.get());
@@ -278,14 +278,14 @@ impl Simulator {
                 
                 let result = !val1;
                 self.access_reg(dr).set(result);
-                self.set_cc(result);
+                self.set_cc(result as i16);
             },
             SimInstr::LDI(dr, off) => {
                 let ea = self.access_mem(self.pc.wrapping_add_signed(off.get())).get_unsigned();
 
                 let val = *self.access_mem(ea);
                 self.access_reg(dr).copy_word(val);
-                self.set_cc(val.get_unsigned());
+                self.set_cc(val.get_signed());
             },
             SimInstr::STI(sr, off) => {
                 let ea = self.access_mem(self.pc.wrapping_add_signed(off.get())).get_unsigned();
