@@ -145,7 +145,7 @@ impl Simulator {
     /// is greater than the PSR's priority.
     /// 
     /// The address provided is the address into the jump table (either the trap or interrupt vector ones).
-    /// This function will always jump to mem[vect] at the end of this function.
+    /// This function will always jump to `mem[vect]` at the end of this function.
     pub fn handle_interrupt(&mut self, vect: u16, priority: Option<u8>) -> Result<(), SimErr> {
         if priority.is_some_and(|prio| prio <= self.priority()) { return Ok(()) };
         if vect == 0x25 { return Err(SimErr::ProgramHalted) }; // HALT!
@@ -159,9 +159,9 @@ impl Simulator {
         let old_psr = self.psr;
         let old_pc = self.pc;
         
-        sp.set(sp.get_unsigned().wrapping_sub(1));
+        sp -= 1u16;
         self.access_mem(sp.get_unsigned()).set(old_psr);
-        sp.set(sp.get_unsigned().wrapping_sub(1));
+        sp -= 1u16;
         self.access_mem(sp.get_unsigned()).set(old_pc);
         
         self.psr &= 0x7FFF; // set privileged
@@ -195,15 +195,15 @@ impl Simulator {
                 }
             },
             SimInstr::ADD(dr, sr1, sr2) => {
-                let val1 = self.access_reg(sr1).get_unsigned();
+                let val1 = *self.access_reg(sr1);
                 let val2 = match sr2 {
-                    crate::ast::ImmOrReg::Imm(i2) => i2.get(),
-                    crate::ast::ImmOrReg::Reg(r2) => self.access_reg(r2).get_signed(),
+                    crate::ast::ImmOrReg::Imm(i2) => Word::new_init(i2.get() as u16),
+                    crate::ast::ImmOrReg::Reg(r2) => *self.access_reg(r2),
                 };
 
-                let result = val1.wrapping_add_signed(val2);
-                self.access_reg(dr).set(result);
-                self.set_cc(result as i16);
+                let result = val1 + val2;
+                self.access_reg(dr).copy_word(result);
+                self.set_cc(result.get_signed());
             },
             SimInstr::LD(dr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
@@ -229,15 +229,15 @@ impl Simulator {
                 self.offset_pc(off)?;
             },
             SimInstr::AND(dr, sr1, sr2) => {
-                let val1 = self.access_reg(sr1).get_unsigned();
+                let val1 = *self.access_reg(sr1);
                 let val2 = match sr2 {
-                    crate::ast::ImmOrReg::Imm(i2) => i2.get() as u16,
-                    crate::ast::ImmOrReg::Reg(r2) => self.access_reg(r2).get_unsigned(),
+                    crate::ast::ImmOrReg::Imm(i2) => Word::new_init(i2.get() as u16),
+                    crate::ast::ImmOrReg::Reg(r2) => *self.access_reg(r2),
                 };
 
                 let result = val1 & val2;
-                self.access_reg(dr).set(result);
-                self.set_cc(result as i16);
+                self.access_reg(dr).copy_word(result);
+                self.set_cc(result.get_signed());
             },
             SimInstr::LDR(dr, br, off) => {
                 let ea = self.access_reg(br).get_unsigned().wrapping_add_signed(off.get());
@@ -257,9 +257,9 @@ impl Simulator {
                     let mut sp = self.reg_file[6];
 
                     let pc = self.access_mem(sp.get_unsigned()).get_unsigned();
-                    sp.set(sp.get_unsigned().wrapping_add(1));
+                    sp += 1u16;
                     let psr = self.access_mem(sp.get_unsigned()).get_unsigned();
-                    sp.set(sp.get_unsigned().wrapping_add(1));
+                    sp += 1u16;
 
                     self.pc = pc;
                     self.psr = psr;
@@ -274,11 +274,11 @@ impl Simulator {
                 }
             },
             SimInstr::NOT(dr, sr) => {
-                let val1 = self.access_reg(sr).get_unsigned();
+                let val = *self.access_reg(sr);
                 
-                let result = !val1;
-                self.access_reg(dr).set(result);
-                self.set_cc(result as i16);
+                let result = !val;
+                self.access_reg(dr).copy_word(result);
+                self.set_cc(result.get_signed());
             },
             SimInstr::LDI(dr, off) => {
                 let ea = self.access_mem(self.pc.wrapping_add_signed(off.get())).get_unsigned();
@@ -357,24 +357,32 @@ impl Default for Simulator {
 /// - [`Word::copy_word`] to read a word into this word
 /// 
 /// `copy_word` may be more useful in situations where initialization state may want to be preserved.
+/// See [`Word::set`] for more details.
+/// 
+/// Words can also be written to by applying assign operations (e.g., add, sub, and, etc.).
+/// All arithmetic operations that can be applied to words are assumed to be wrapping.
+/// See those implementations for more details.
 #[derive(Debug, Clone, Copy)]
 pub struct Word {
     data: u16,
-    init: bool 
+    init: u16
 }
+
+const NO_BITS:  u16 = 0;
+const ALL_BITS: u16 = 1u16.wrapping_neg();
 impl Word {
     /// Creates a new word that is considered uninitialized.
     pub fn new_uninit() -> Self {
         Self {
             data: 0,
-            init: false,
+            init: NO_BITS,
         }
     }
     /// Creates a new word that is initialized with a given data value.
     pub fn new_init(data: u16) -> Self {
         Self {
             data,
-            init: true,
+            init: ALL_BITS,
         }
     }
 
@@ -386,15 +394,169 @@ impl Word {
     pub fn get_signed(&self) -> i16 {
         self.data as i16
     }
+
+    /// Checks that a word is fully initialized
+    pub fn is_init(&self) -> bool {
+        self.init == ALL_BITS
+    }
+
     /// Writes to the word.
+    /// 
+    /// The data provided is assumed to be FULLY initialized,
+    /// and will set the initialization state of this word to be
+    /// fully initialized.
+    /// 
+    /// If the data is not fully initialized (e.g., if it is a partially initialized word),
+    /// [`Word::copy_word`] can be used instead.
     pub fn set(&mut self, data: u16) {
         self.data = data;
-        self.init = true;
+        self.init = ALL_BITS;
     }
     /// Copies the data from one word into another.
     /// 
     /// This is useful for preserving initialization state.
     pub fn copy_word(&mut self, word: Word) {
         *self = word;
+    }
+}
+
+/** NOT **/
+impl std::ops::Not for Word {
+    type Output = Word;
+
+    /// Inverts the data on this word, preserving any initialization state.
+    fn not(self) -> Self::Output {
+        // Initialization state should stay the same after this.
+        let Self { data, init } = self;
+        Self { data: !data, init }
+    }
+}
+
+/** ADD **/
+impl std::ops::Add for Word {
+    type Output = Word;
+
+    /// Adds two words together (wrapping if overflow occurs).
+    /// 
+    /// If the two words are fully initialized, 
+    /// the resulting word will also be fully initialized.
+    /// Otherwise, the resulting word is fully uninitialized.
+    fn add(self, rhs: Self) -> Self::Output {
+        let Self { data: ldata, init: linit } = self;
+        let Self { data: rdata, init: rinit } = rhs;
+
+        let data = ldata.wrapping_add(rdata);
+        // Very lazy initialization scheme.
+        // If both are fully init, consider this word fully init.
+        // Otherwise, consider it fully uninit.
+        let init = match linit == ALL_BITS && rinit == ALL_BITS {
+            true  => ALL_BITS,
+            false => NO_BITS,
+        };
+
+        Self { data, init }
+    }
+}
+impl std::ops::AddAssign for Word {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+impl std::ops::AddAssign<u16> for Word {
+    /// Increments the word by the provided value.
+    /// 
+    /// If the word was fully initialized,
+    /// its updated value is also fully initialized.
+    /// Otherwise, the resulting word is fully uninitialized.
+    fn add_assign(&mut self, rhs: u16) {
+        *self = *self + Word::new_init(rhs);
+    }
+}
+impl std::ops::AddAssign<i16> for Word {
+    /// Increments the word by the provided value.
+    /// 
+    /// If the word was fully initialized,
+    /// its updated value is also fully initialized.
+    /// Otherwise, the resulting word is fully uninitialized.
+    fn add_assign(&mut self, rhs: i16) {
+        *self = *self + Word::new_init(rhs as _);
+    }
+}
+
+/** SUB **/
+impl std::ops::Sub for Word {
+    type Output = Word;
+
+    /// Subtracts two words together (wrapping if overflow occurs).
+    /// 
+    /// If the two words are fully initialized, 
+    /// the resulting word will also be fully initialized.
+    /// Otherwise, the resulting word is fully uninitialized.
+    fn sub(self, rhs: Self) -> Self::Output {
+        let Self { data: ldata, init: linit } = self;
+        let Self { data: rdata, init: rinit } = rhs;
+
+        let data = ldata.wrapping_sub(rdata);
+        // Very lazy initialization scheme.
+        // If both are fully init, consider this word fully init.
+        // Otherwise, consider it fully uninit.
+        let init = match linit == ALL_BITS && rinit == ALL_BITS {
+            true  => ALL_BITS,
+            false => NO_BITS,
+        };
+
+        Self { data, init }
+    }
+}
+impl std::ops::SubAssign for Word {
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
+}
+impl std::ops::SubAssign<u16> for Word {
+    /// Decrements the word by the provided value.
+    /// 
+    /// If the word was fully initialized,
+    /// its updated value is also fully initialized.
+    /// Otherwise, the resulting word is fully uninitialized.
+    fn sub_assign(&mut self, rhs: u16) {
+        *self = *self - Word::new_init(rhs);
+    }
+}
+impl std::ops::SubAssign<i16> for Word {
+    /// Decrements the word by the provided value.
+    /// 
+    /// If the word was fully initialized,
+    /// its updated value is also fully initialized.
+    /// Otherwise, the resulting word is fully uninitialized.
+    fn sub_assign(&mut self, rhs: i16) {
+        *self = *self - Word::new_init(rhs as _);
+    }
+}
+
+/** AND **/
+impl std::ops::BitAnd for Word {
+    type Output = Word;
+
+    /// Applies a bitwise AND across two words.
+    /// 
+    /// This will also compute the correct initialization
+    /// for the resulting word, taking into account bit clearing.
+    fn bitand(self, rhs: Self) -> Self::Output {
+        let Self { data: ldata, init: linit } = self;
+        let Self { data: rdata, init: rinit } = rhs;
+
+        let data = ldata & rdata;
+        // A given bit of the result is init if:
+        // - both the lhs and rhs bits are init
+        // - either of the bits are data: 0, init: 1
+        let init = (linit & rinit) | (!ldata & linit) | (!rdata & rinit);
+
+        Self { data, init }
+    }
+}
+impl std::ops::BitAndAssign for Word {
+    fn bitand_assign(&mut self, rhs: Self) {
+        *self = *self & rhs;
     }
 }
