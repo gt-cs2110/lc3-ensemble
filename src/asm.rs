@@ -62,15 +62,11 @@ impl SymbolTable {
                 let Some(addr) = lc else { return Err(AsmErr::CannotDetAddress) };
 
                 for label in &stmt.labels {
-                    match labels.entry(label.to_string()) {
+                    match labels.entry(label.to_uppercase()) {
                         Entry::Occupied(_) => return Err(AsmErr::OverlappingLabels),
                         Entry::Vacant(e) => e.insert(addr),
                     };
                 }
-                labels.extend({
-                    stmt.labels.iter()
-                        .map(|label| (label.to_uppercase(), addr))
-                });
             }
 
             lc = match &stmt.nucleus {

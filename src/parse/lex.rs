@@ -89,9 +89,9 @@ macro_rules! ident_enum {
             type Err = std::convert::Infallible;
         
             fn from_str(s: &str) -> Result<Self, Self::Err> {
-                match s {
+                match &*s.to_uppercase() {
                     $(stringify!($instr) => Ok(Self::$instr)),*,
-                    s => Ok(Self::Label(s.to_string()))
+                    _ => Ok(Self::Label(s.to_string()))
                 }
             }
         }
