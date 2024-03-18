@@ -1,5 +1,9 @@
+//! IO handling for LC-3.
+//! 
+//! The main struct of this module is the [`SimIO`] struct,
+//! which handles the keyboard and display.
+
 use std::io::{stdin, stdout, BufRead, Write};
-use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::TryRecvError;
 use std::sync::{mpsc, Arc};
@@ -10,18 +14,33 @@ const KBDR: u16 = 0xFE02;
 const DSR: u16  = 0xFE04;
 const DDR: u16  = 0xFE06;
 
-pub(crate) struct SimIO {
-    pub(crate) kb_status: Arc<AtomicBool>,
-    pub(crate) kb_data: mpsc::Receiver<u8>,
-    pub(crate) kb_handler: JoinHandle<()>,
-
-    pub(crate) display_status: Arc<AtomicBool>,
-    pub(crate) display_data: mpsc::Sender<u8>,
-    pub(crate) display_handler: JoinHandle<()>,
+/// Simulator input/output.
+/// 
+/// This contains a **keyboard**, which is accessible through the KBSR and KBDR. 
+/// (Note that due to the limitations of terminals, the key is displayed and
+/// characters only appear once a new line appears in the input.)
+/// 
+/// This also contains a **display**, which is accessible through the DSR and DDR.
+pub struct SimIO {
+    /// Whether the keyboard has received a new character.
+    kb_status: Arc<AtomicBool>,
+    /// A channel to access the keyboard's characters.
+    kb_data: mpsc::Receiver<u8>,
+    /// The thread where the keyboard's process occurs.
+    #[allow(unused)]
+    kb_handler: JoinHandle<()>,
+    
+    /// Whether the display is ready to receive a new character.
+    display_status: Arc<AtomicBool>,
+    /// A channel to send characters to the display.
+    display_data: mpsc::Sender<u8>,
+    /// The thread where the display's process occurs.
+    display_handler: JoinHandle<()>,
 }
 
 impl SimIO {
-    pub(crate) fn new() -> SimIO {
+    /// Creates the IO processes.
+    pub fn new() -> SimIO {
         let (kb_send, kb_recv) = mpsc::sync_channel(1);
         let (ds_send, ds_recv) = mpsc::channel();
         
@@ -73,7 +92,11 @@ impl SimIO {
         }
     }
 
-    pub(crate) fn io_read(&self, addr: u16) -> Option<u16> {
+    /// Reads the data at the given memory-mapped address (which is controlled by SimIO).
+    /// 
+    /// If successful, this returns the value returned from that address.
+    /// If unsuccessful, this returns `None`.
+    pub fn io_read(&self, addr: u16) -> Option<u16> {
         match addr {
             KBSR => match self.kb_status.load(Ordering::Relaxed) {
                 true  => Some(0x8000),
@@ -94,12 +117,18 @@ impl SimIO {
             _ => None
         }
     }
-    pub(crate) fn io_write(&self, addr: u16, data: u16) -> bool {
+
+    /// Writes the data to the given memory-mapped address (which is controlled by SimIO).
+    /// 
+    /// This returns whether the write was successful or not.
+    pub fn io_write(&self, addr: u16, data: u16) -> bool {
         match addr {
             DDR => self.display_data.send(data as u8).is_ok(),
             _ => false
         }
     }
+
+    /// Closes the keyboard and display channels and waits for the display to complete.
     pub fn join(self) -> std::thread::Result<()> {
         let Self { kb_status: _, kb_data, kb_handler: _, display_status: _, display_data, display_handler } = self;
 
@@ -109,8 +138,14 @@ impl SimIO {
         display_handler.join()
     }
 }
+
 impl std::fmt::Debug for SimIO {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SimIO").finish_non_exhaustive()
+    }
+}
+impl Default for SimIO {
+    fn default() -> Self {
+        Self::new()
     }
 }
