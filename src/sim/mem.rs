@@ -1,9 +1,9 @@
-//! Individual memory cells ([`Word`]s).
+//! Memory handling for the LC-3 simulator.
 //! 
 //! This module consists of:
-//! - [`Word`]: A mutable memory location
-//! - [`Mem`]: The memory
-//! - [`RegFile`]: The register file
+//! - [`Word`]: A mutable memory location.
+//! - [`Mem`]: The memory.
+//! - [`RegFile`]: The register file.
 
 use crate::ast::Reg;
 
@@ -13,9 +13,8 @@ use super::SimErr;
 /// 
 /// # Reading
 /// 
-/// A word can be read as either an unsigned integer or a signed one.
-/// - [`Word::get_unsigned`] to read the word as unsigned
-/// - [`Word::get_signed`] to read the word as signed
+/// A word's value can be read with [`Word::get`]
+/// to return its representation as an unsigned integer.
 /// 
 /// # Writing
 /// 
@@ -23,8 +22,8 @@ use super::SimErr;
 /// - [`Word::set`] to read a value into this word
 /// - [`Word::copy_word`] to read a word into this word
 /// 
-/// `copy_word` may be more useful in situations where initialization state may want to be preserved.
-/// See [`Word::set`] for more details.
+/// [`Word::copy_word`] may be more useful in situations where initialization state may want to be preserved.
+/// See the respective functions for more details.
 /// 
 /// Words can also be written to by applying assign operations (e.g., add, sub, and, etc.).
 /// All arithmetic operations that can be applied to words are assumed to be wrapping.
@@ -79,7 +78,7 @@ impl Word {
     /// 
     /// This function is more cognizant of word initialization than [`Word::set`].
     /// - In non-strict mode, this function preserves the initialization data of the given word.
-    /// - In strict mode, this function verifies the word copied is fully initialized, raising an error if not.
+    /// - In strict mode, this function verifies the word copied is fully initialized, raising the provided error if not.
     pub fn copy_word(&mut self, word: Word, strict: bool, err: SimErr) -> Result<(), SimErr> {
         match !strict || word.is_init() {
             true => {
@@ -102,7 +101,7 @@ impl From<i16> for Word {
         Word::new_init(value as u16)
     }
 }
-/** NOT **/
+
 impl std::ops::Not for Word {
     type Output = Word;
 
@@ -114,7 +113,7 @@ impl std::ops::Not for Word {
     }
 }
 
-/** ADD **/
+
 impl std::ops::Add for Word {
     type Output = Word;
 
@@ -165,7 +164,7 @@ impl std::ops::AddAssign<i16> for Word {
     }
 }
 
-/** SUB **/
+
 impl std::ops::Sub for Word {
     type Output = Word;
 
@@ -216,7 +215,7 @@ impl std::ops::SubAssign<i16> for Word {
     }
 }
 
-/** AND **/
+
 impl std::ops::BitAnd for Word {
     type Output = Word;
 
@@ -269,14 +268,17 @@ impl AssertInit for Word {
 }
 
 /// Context behind a memory access.
+/// 
+/// This struct is used by [`Mem::get`] and [`Mem::set`] to perform checks against memory accesses.
+/// It can be constructed with [`super::Simulator::mem_ctx`].
 #[derive(Clone, Copy)]
 pub struct MemAccessCtx<'ctx> {
-    /// Whether this access is privileged (false = user, true = supervisor)
+    /// Whether this access is privileged (false = user, true = supervisor).
     pub privileged: bool,
     /// Whether writes to memory should follow strict rules 
-    /// (no writing partially or fully uninitialized data)
+    /// (no writing partially or fully uninitialized data).
     pub strict: bool,
-    /// IO access device
+    /// Reference to the IO device.
     pub io: &'ctx super::io::SimIO
 }
 

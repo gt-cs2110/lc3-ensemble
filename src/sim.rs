@@ -4,17 +4,19 @@
 //! 
 //! This module consists of:
 //! - [`Simulator`]: The struct that simulates assembled code.
-//! - [`Word`]: A mutable memory location.
-//! - [`WordArray`]: An array of memory locations, which can be indexed with non-usize types
+//! - [`mem`]: The module handling memory relating to the registers.
+//! - [`SimIO`]: The struct handling the simulator's IO.
 
-mod word;
-pub mod io;
+pub mod mem;
+mod io;
 
 use crate::asm::ObjectFile;
 use crate::ast::reg_consts::{R6, R7};
 use crate::ast::sim::SimInstr;
 use crate::ast::ImmOrReg;
-pub use word::*;
+pub use io::SimIO;
+
+use self::mem::{AssertInit as _, Mem, MemAccessCtx, RegFile, Word};
 
 /// Errors that can occur during simulation.
 #[derive(Debug)]
@@ -141,7 +143,13 @@ impl Simulator {
     }
 
     /// Computes the memory access context, 
-    /// which are flags that control privilege and checks when accessing memory.
+    /// which are flags that control privilege and checks when accessing memory
+    /// (see [`Mem::get`] and [`Mem::set`]).
+    /// 
+    /// Due to the way Rust lifetimes work, this does not automatically insert the IO device's
+    /// reference.
+    /// If you want to use this, try `self.mem_ctx(&self.io)` (or create a macro that does
+    /// what this internally does).
     pub fn mem_ctx<'ctx>(&self, io: &'ctx io::SimIO) -> MemAccessCtx<'ctx> {
         MemAccessCtx { privileged: self.psr.privileged(), strict: self.strict, io }
     }

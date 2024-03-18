@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, HashMap};
 use crate::ast::asm::{AsmInstr, Directive, Stmt, StmtKind};
 use crate::ast::sim::SimInstr;
 use crate::ast::{IOffset, ImmOrReg, Offset, OffsetNewErr, PCOffset, Reg};
-use crate::sim::Word;
+use crate::sim::mem::Word;
 
 
 /// Error from assembling given assembly code.
