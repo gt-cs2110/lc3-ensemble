@@ -58,12 +58,8 @@ pub struct Simulator {
     /// The program counter.
     pub pc: u16,
 
-    /// The processor status register.
-    /// 
-    /// - `PSR[15..16]`: Privilege mode (0 = supervisor, 1 = user)
-    /// - `PSR[8..11]`:  Interrupt priority
-    /// - `PSR[0..3]`:   Condition codes
-    psr: u16,
+    /// The processor status register. See [`PSR`] for more details.
+    pub psr: PSR,
 
     /// Saved stack pointer (the one currently not in use)
     saved_sp: Word,
@@ -83,10 +79,10 @@ pub struct Simulator {
     /// 
     /// Strict mode adds additional integrity checks to the simulator,
     /// such as verifying initialization state is normal for provided data.
-    strict: bool,
+    pub strict: bool,
 
     /// IO handler for the simulator
-    io: io::SimIO,
+    pub io: io::SimIO,
 }
 
 impl Simulator {
@@ -96,7 +92,7 @@ impl Simulator {
             mem: Mem::new(),
             reg_file: RegFile::new(),
             pc: 0x3000,
-            psr: 0x8002,
+            psr: PSR::new(),
             saved_sp: Word::new_init(0x2FFF),
             sr_entered: 0,
             strict: false,
@@ -117,23 +113,13 @@ impl Simulator {
 
     /// Sets the condition codes using the provided result.
     fn set_cc(&mut self, result: u16) {
-        self.psr &= 0xFFF8;
         match (result as i16).cmp(&0) {
-            std::cmp::Ordering::Less    => self.psr |= 0b100,
-            std::cmp::Ordering::Equal   => self.psr |= 0b010,
-            std::cmp::Ordering::Greater => self.psr |= 0b001,
+            std::cmp::Ordering::Less    => self.psr.set_cc(0b100),
+            std::cmp::Ordering::Equal   => self.psr.set_cc(0b010),
+            std::cmp::Ordering::Greater => self.psr.set_cc(0b001),
         }
     }
-    /// Checks if the simulator is in privileged mode.
-    pub fn is_privileged(&self) -> bool {
-        (self.psr & 0x8000) == 0
-    }
 
-    /// Checks the PSR's priority.
-    pub fn priority(&self) -> u8 {
-        ((self.psr >> 8) & 0b111) as u8
-    }
-    
     /// Sets the PC to the given address, raising any errors that occur.
     pub fn set_pc(&mut self, addr_word: Word) -> Result<(), SimErr> {
         let addr = addr_word.get();
@@ -157,7 +143,7 @@ impl Simulator {
     /// Computes the memory access context, 
     /// which are flags that control privilege and checks when accessing memory.
     pub fn mem_ctx<'ctx>(&self, io: &'ctx io::SimIO) -> MemAccessCtx<'ctx> {
-        MemAccessCtx { privileged: self.is_privileged(), strict: self.strict, io }
+        MemAccessCtx { privileged: self.psr.privileged(), strict: self.strict, io }
     }
 
     /// Interrupt, trap, and exception handler.
@@ -169,18 +155,18 @@ impl Simulator {
     /// The address provided is the address into the jump table (either the trap or interrupt vector ones).
     /// This function will always jump to `mem[vect]` at the end of this function.
     pub fn handle_interrupt(&mut self, vect: u16, priority: Option<u8>) -> Result<(), SimErr> {
-        if priority.is_some_and(|prio| prio <= self.priority()) { return Ok(()) };
+        if priority.is_some_and(|prio| prio <= self.psr.priority()) { return Ok(()) };
         if vect == 0x25 { return Err(SimErr::ProgramHalted) }; // HALT!
         
-        if !self.is_privileged() {
+        if !self.psr.privileged() {
             std::mem::swap(&mut self.saved_sp, &mut self.reg_file[R6]);
         }
 
         // Push PSR, PC to supervisor stack
-        let old_psr = self.psr;
+        let old_psr = self.psr.0;
         let old_pc = self.pc;
         
-        self.psr &= 0x7FFF; // set privileged
+        self.psr.set_privileged(true);
         let mctx = self.mem_ctx(&self.io);
         let sp = &mut self.reg_file[R6];
 
@@ -191,8 +177,7 @@ impl Simulator {
         
         // set interrupt priority
         if let Some(prio) = priority {
-            self.psr &= !(0b111 << 8);
-            self.psr |= (prio as u16 & 0b111) << 8;
+            self.psr.set_priority(prio);
         }
 
         self.sr_entered += 1;
@@ -213,7 +198,7 @@ impl Simulator {
 
         match instr {
             SimInstr::BR(cc, off)  => {
-                if (cc as u16) & self.psr & 0b111 != 0 {
+                if cc & self.psr.cc() != 0 {
                     self.offset_pc(off.get())?;
                 }
             },
@@ -282,7 +267,7 @@ impl Simulator {
                 self.mem.set(ea, val, self.mem_ctx(&self.io))?;
             },
             SimInstr::RTI => {
-                if self.is_privileged() {
+                if self.psr.privileged() {
                     let mctx = self.mem_ctx(&self.io);
                     let sp = (&mut self.reg_file[R6])
                         .assert_init(self.strict, SimErr::StrictMemAddrUninit)?;
@@ -297,9 +282,9 @@ impl Simulator {
                     *sp += 1u16;
 
                     self.pc = pc;
-                    self.psr = psr;
+                    self.psr = PSR(psr);
 
-                    if !self.is_privileged() {
+                    if !self.psr.privileged() {
                         std::mem::swap(&mut self.saved_sp, &mut self.reg_file[R6]);
                     }
 
@@ -379,5 +364,80 @@ impl Simulator {
 impl Default for Simulator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A wrapper over `u16` in order to faciliate the PSR.
+/// 
+/// The word is encoded as the following:
+/// - `PSR[15..16]`: Privilege mode (0 = supervisor, 1 = user)
+/// - `PSR[8..11]`:  Interrupt priority
+/// - `PSR[0..3]`:   Condition codes
+/// 
+/// Each of these are exposed as the [`PSR::privileged`], [`PSR::priority`], and [`PSR::cc`] values.
+#[allow(clippy::upper_case_acronyms)]
+#[repr(transparent)]
+pub struct PSR(pub u16);
+
+impl PSR {
+    /// Creates a PSR with a default value.
+    pub fn new() -> Self {
+        PSR(0x8002)
+    }
+
+    /// Checks whether the simulator is in privileged mode.
+    /// - `true` = supervisor mode
+    /// - `false` = user mode
+    pub fn privileged(&self) -> bool {
+        (self.0 >> 15) == 0
+    }
+    /// Checks the current interrupt priority of the simulator.
+    pub fn priority(&self) -> u8 {
+        ((self.0 >> 8) & 0b111) as u8
+    }
+    /// Checks the condition code of the simulator.
+    pub fn cc(&self) -> u8 {
+        (self.0 & 0b111) as u8
+    }
+    /// Sets whether the simulator is in privileged mode.
+    pub fn set_privileged(&mut self, privl: bool) {
+        self.0 &= 0x7FFF;
+        self.0 |= (!privl as u16) << 15;
+    }
+    /// Sets the current interrupt priority of the simulator.
+    pub fn set_priority(&mut self, prio: u8) {
+        self.0 &= 0xF8FF;
+        self.0 |= (prio as u16) << 8;
+    }
+    /// Sets the condition code of the simulator.
+    pub fn set_cc(&mut self, cc: u8) {
+        self.0 &= 0xFFF8;
+        self.0 |= cc as u16;
+    }
+}
+impl Default for PSR {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl std::fmt::Debug for PSR {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use std::fmt::Write;
+        struct CC(u8);
+
+        impl std::fmt::Debug for CC {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                if self.0 & 0b100 != 0 { f.write_char('N')?; };
+                if self.0 & 0b010 != 0 { f.write_char('Z')?; };
+                if self.0 & 0b001 != 0 { f.write_char('P')?; };
+                Ok(())
+            }
+        }
+
+        f.debug_struct("PSR")
+            .field("privileged", &self.privileged())
+            .field("priority", &self.priority())
+            .field("cc", &CC(self.cc()))
+            .finish()
     }
 }
