@@ -1,7 +1,9 @@
 use std::io::{stdin, stdout, BufRead, Write};
+use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::TryRecvError;
 use std::sync::{mpsc, Arc};
+use std::thread::JoinHandle;
 
 const KBSR: u16 = 0xFE00;
 const KBDR: u16 = 0xFE02;
@@ -11,34 +13,32 @@ const DDR: u16  = 0xFE06;
 pub(crate) struct SimIO {
     pub(crate) kb_status: Arc<AtomicBool>,
     pub(crate) kb_data: mpsc::Receiver<u8>,
+    pub(crate) kb_handler: JoinHandle<()>,
 
     pub(crate) display_status: Arc<AtomicBool>,
-    pub(crate) display_data: mpsc::SyncSender<u8>
+    pub(crate) display_data: mpsc::Sender<u8>,
+    pub(crate) display_handler: JoinHandle<()>,
 }
 
 impl SimIO {
     pub(crate) fn new() -> SimIO {
         let (kb_send, kb_recv) = mpsc::sync_channel(1);
-        let (ds_send, ds_recv) = mpsc::sync_channel(1);
+        let (ds_send, ds_recv) = mpsc::channel();
         
-        let io = Self {
-            kb_status: Arc::new(AtomicBool::new(false)),
-            kb_data: kb_recv,
+        let kbs = Arc::new(AtomicBool::new(false));
+        let kb_status = Arc::clone(&kbs);
+        let dss = Arc::new(AtomicBool::new(false));
+        let display_status = Arc::clone(&dss);
 
-            display_status: Arc::new(AtomicBool::new(false)),
-            display_data: ds_send
-        };
-
-        let kb_status = Arc::clone(&io.kb_status);
-        let display_status = Arc::clone(&io.display_status);
+        let kb_status = Arc::clone(&kb_status);
+        let display_status = Arc::clone(&display_status);
 
         // STDIN loop
-        std::thread::spawn(move || loop {
+        let kb_handler = std::thread::spawn(move || loop {
             let buf = stdin().lock().fill_buf().unwrap().to_vec();
             for byte in buf {
-                kb_status.store(true, Ordering::Relaxed);
                 let result = kb_send.send(byte);
-                kb_status.store(false, Ordering::Release);
+                kbs.store(true, Ordering::Relaxed);
 
                 match result {
                     Ok(_)  => stdin().lock().consume(1),
@@ -48,11 +48,11 @@ impl SimIO {
         });
 
         // STDOUT loop
-        std::thread::spawn(move || loop {
-            display_status.store(true, Ordering::Relaxed);
+        let display_handler = std::thread::spawn(move || loop {
+            dss.store(true, Ordering::Relaxed);
             let result = ds_recv.recv();
-            display_status.store(true, Ordering::Release);
-
+            
+            dss.store(false, Ordering::Release);
             match result {
                 Ok(b) => {
                     stdout().write_all(&[b]).unwrap();
@@ -62,7 +62,15 @@ impl SimIO {
             }
         });
 
-        io
+        Self {
+            kb_status,
+            kb_data: kb_recv,
+            kb_handler,
+
+            display_status,
+            display_data: ds_send,
+            display_handler,
+        }
     }
 
     pub(crate) fn io_read(&self, addr: u16) -> Option<u16> {
@@ -72,11 +80,14 @@ impl SimIO {
                 false => Some(0x0000),
             },
             KBDR => match self.kb_data.try_recv() {
-                Ok(b) => Some(u16::from(b)),
+                Ok(b) => {
+                    self.kb_status.store(false, Ordering::Release);
+                    Some(u16::from(b))
+                },
                 Err(TryRecvError::Empty) => None,
                 Err(TryRecvError::Disconnected) => None, // unreachable: keyboard disconnected
             },
-            DSR => match self.display_status.load(Ordering::Relaxed) {
+            DSR => match self.display_status.load(Ordering::Acquire) {
                 true  => Some(0x8000),
                 false => Some(0x0000)
             }
@@ -85,12 +96,17 @@ impl SimIO {
     }
     pub(crate) fn io_write(&self, addr: u16, data: u16) -> bool {
         match addr {
-            DDR => match self.display_data.try_send(data as u8) {
-                Ok(()) => true,
-                Err(_) => false,
-            },
+            DDR => self.display_data.send(data as u8).is_ok(),
             _ => false
         }
+    }
+    pub fn join(self) -> std::thread::Result<()> {
+        let Self { kb_status: _, kb_data, kb_handler: _, display_status: _, display_data, display_handler } = self;
+
+        std::mem::drop(kb_data);
+        std::mem::drop(display_data);
+
+        display_handler.join()
     }
 }
 impl std::fmt::Debug for SimIO {
