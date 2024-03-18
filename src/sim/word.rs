@@ -276,7 +276,10 @@ impl AssertInit for Word {
 #[derive(Clone, Copy)]
 pub struct MemAccessCtx {
     /// Whether this access is privileged (false = user, true = supervisor)
-    pub privileged: bool
+    pub privileged: bool,
+    /// Whether writes to memory should follow strict rules 
+    /// (no writing partially or fully uninitialized data)
+    pub strict: bool
 }
 
 const N: usize = 2usize.pow(16);
@@ -314,15 +317,16 @@ impl Mem {
         }
     }
 
-    /// Fallibly indexes the memory, returning a reference to the word if possible.
-    pub fn index(&self, index: u16, ctx: MemAccessCtx) -> Result<&Word, SimErr> {
+    /// Fallibly gets the word at the provided index, erroring if not possible.
+    pub fn get(&self, index: u16, ctx: MemAccessCtx) -> Result<Word, SimErr> {
         if !ctx.privileged && !USER_RANGE.contains(&index) { return Err(SimErr::AccessViolation) };
-        Ok(&self.0[usize::from(index)])
+        Ok(self.0[usize::from(index)])
     }
-    /// Fallibly indexes the memory, returning a mutable reference to the word if possible.
-    pub fn index_mut(&mut self, index: u16, ctx: MemAccessCtx) -> Result<&mut Word, SimErr> {
+    /// Fallibly attempts to set at the provided index, erroring if not possible.
+    pub fn set(&mut self, index: u16, data: Word, ctx: MemAccessCtx) -> Result<(), SimErr> {
         if !ctx.privileged && !USER_RANGE.contains(&index) { return Err(SimErr::AccessViolation) };
-        Ok(&mut self.0[usize::from(index)])
+        
+        self.0[usize::from(index)].copy_word(data, ctx.strict, SimErr::StrictMemSetUninit)
     }
 }
 impl Default for Mem {
