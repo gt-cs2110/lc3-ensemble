@@ -111,9 +111,9 @@ impl Simulator {
     }
 
     /// Sets the condition codes using the provided result.
-    fn set_cc(&mut self, result: i16) {
+    fn set_cc(&mut self, result: u16) {
         self.psr &= 0xFFF8;
-        match result.cmp(&0) {
+        match (result as i16).cmp(&0) {
             std::cmp::Ordering::Less    => self.psr |= 0b100,
             std::cmp::Ordering::Equal   => self.psr |= 0b010,
             std::cmp::Ordering::Greater => self.psr |= 0b001,
@@ -131,7 +131,7 @@ impl Simulator {
     
     /// Sets the PC to the given address, raising any errors that occur.
     pub fn set_pc(&mut self, addr_word: Word) -> Result<(), SimErr> {
-        let addr = addr_word.get_unsigned();
+        let addr = addr_word.get();
         let data = self.mem.get(addr, self.mem_ctx())?;
 
         if self.strict {
@@ -180,9 +180,9 @@ impl Simulator {
         let sp = &mut self.reg_file[R6];
 
         *sp -= 1u16;
-        self.mem.set(sp.get_unsigned(), Word::new_init(old_psr), mctx)?;
+        self.mem.set(sp.get(), Word::new_init(old_psr), mctx)?;
         *sp -= 1u16;
-        self.mem.set(sp.get_unsigned(), Word::new_init(old_pc), mctx)?;
+        self.mem.set(sp.get(), Word::new_init(old_pc), mctx)?;
         
         // set interrupt priority
         if let Some(prio) = priority {
@@ -202,7 +202,7 @@ impl Simulator {
     }
     /// Perform one step through the simulator's execution.
     pub fn step_in(&mut self) -> Result<(), SimErr> {
-        let word = self.mem.get(self.pc, self.mem_ctx())?.get_unsigned();
+        let word = self.mem.get(self.pc, self.mem_ctx())?.get();
         let instr = SimInstr::decode(word)?;
         self.offset_pc(1)?;
 
@@ -221,14 +221,14 @@ impl Simulator {
 
                 let result = val1 + val2;
                 self.reg_file[dr].copy_word(result, self.strict, SimErr::StrictRegSetUninit)?;
-                self.set_cc(result.get_signed());
+                self.set_cc(result.get());
             },
             SimInstr::LD(dr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
                 
                 let val = self.mem.get(ea, self.mem_ctx())?;
                 self.reg_file[dr].copy_word(val, self.strict, SimErr::StrictRegSetUninit)?;
-                self.set_cc(val.get_signed());
+                self.set_cc(val.get());
             },
             SimInstr::ST(sr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
@@ -255,22 +255,22 @@ impl Simulator {
 
                 let result = val1 & val2;
                 self.reg_file[dr].copy_word(result, self.strict, SimErr::StrictRegSetUninit)?;
-                self.set_cc(result.get_signed());
+                self.set_cc(result.get());
             },
             SimInstr::LDR(dr, br, off) => {
                 let ea = self.reg_file[br]
                     .assert_init(self.strict, SimErr::StrictMemAddrUninit)?
-                    .get_unsigned()
+                    .get()
                     .wrapping_add_signed(off.get());
 
                 let val = self.mem.get(ea, self.mem_ctx())?;
                 self.reg_file[dr].copy_word(val, self.strict, SimErr::StrictRegSetUninit)?;
-                self.set_cc(val.get_signed());
+                self.set_cc(val.get());
             },
             SimInstr::STR(sr, br, off) => {
                 let ea = self.reg_file[br]
                     .assert_init(self.strict, SimErr::StrictMemAddrUninit)?
-                    .get_unsigned()
+                    .get()
                     .wrapping_add_signed(off.get());
                 
                 let val = self.reg_file[sr];
@@ -282,13 +282,13 @@ impl Simulator {
                     let sp = (&mut self.reg_file[R6])
                         .assert_init(self.strict, SimErr::StrictMemAddrUninit)?;
 
-                    let pc = self.mem.get(sp.get_unsigned(), mctx)?
+                    let pc = self.mem.get(sp.get(), mctx)?
                         .assert_init(self.strict, SimErr::StrictJmpAddrUninit)?
-                        .get_unsigned();
+                        .get();
                     *sp += 1u16;
-                    let psr = self.mem.get(sp.get_unsigned(), mctx)?
+                    let psr = self.mem.get(sp.get(), mctx)?
                         .assert_init(self.strict, SimErr::StrictPSRSetUninit)?
-                        .get_unsigned();
+                        .get();
                     *sp += 1u16;
 
                     self.pc = pc;
@@ -308,23 +308,23 @@ impl Simulator {
                 
                 let result = !val;
                 self.reg_file[dr].copy_word(result, self.strict, SimErr::StrictRegSetUninit)?;
-                self.set_cc(result.get_signed());
+                self.set_cc(result.get());
             },
             SimInstr::LDI(dr, off) => {
                 let shifted_pc = self.pc.wrapping_add_signed(off.get());
                 let ea = self.mem.get(shifted_pc, self.mem_ctx())?
                     .assert_init(self.strict, SimErr::StrictMemAddrUninit)?
-                    .get_unsigned();
+                    .get();
 
                 let val = self.mem.get(ea, self.mem_ctx())?;
                 self.reg_file[dr].copy_word(val, self.strict, SimErr::StrictRegSetUninit)?;
-                self.set_cc(val.get_signed());
+                self.set_cc(val.get());
             },
             SimInstr::STI(sr, off) => {
                 let shifted_pc = self.pc.wrapping_add_signed(off.get());
                 let ea = self.mem.get(shifted_pc, self.mem_ctx())?
                     .assert_init(self.strict, SimErr::StrictMemAddrUninit)?
-                    .get_unsigned();
+                    .get();
 
                 let val = self.reg_file[sr];
                 self.mem.set(ea, val, self.mem_ctx())?;

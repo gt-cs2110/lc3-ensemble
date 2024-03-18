@@ -54,12 +54,8 @@ impl Word {
     }
 
     /// Reads the word, returning its unsigned representation.
-    pub fn get_unsigned(&self) -> u16 {
+    pub fn get(&self) -> u16 {
         self.data
-    }
-    /// Reads the word, returning its signed representation.
-    pub fn get_signed(&self) -> i16 {
-        self.data as i16
     }
 
     /// Checks that a word is fully initialized
