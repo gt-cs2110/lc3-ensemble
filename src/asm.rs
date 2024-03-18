@@ -135,7 +135,7 @@ impl AsmInstr {
             AsmInstr::STI(sr, off)      => Ok(SimInstr::STI(sr, replace_pc_offset(off, lc, sym)?)),
             AsmInstr::STR(sr, br, off)  => Ok(SimInstr::STR(sr, br, off)),
             AsmInstr::TRAP(vect)        => Ok(SimInstr::TRAP(vect)),
-            AsmInstr::NOP               => Ok(SimInstr::BR(0b111, Offset::new_trunc(0))),
+            AsmInstr::NOP(off)          => Ok(SimInstr::BR(0b111, replace_pc_offset(off, lc, sym)?)),
             AsmInstr::GETC              => Ok(SimInstr::TRAP(Offset::new_trunc(0x20))),
             AsmInstr::OUT               => Ok(SimInstr::TRAP(Offset::new_trunc(0x21))),
             AsmInstr::PUTC              => Ok(SimInstr::TRAP(Offset::new_trunc(0x21))),

@@ -5,6 +5,7 @@
 //! 
 //! [`asm::AsmInstr`]: [`crate::ast::asm::AsmInstr`]
 
+use std::fmt::Write as _;
 use std::ops::Range;
 
 use crate::sim::SimErr;
@@ -68,6 +69,41 @@ pub enum SimInstr {
     LEA(Reg, IOffset<9>),
     #[allow(missing_docs)]
     TRAP(TrapVect8),
+}
+impl std::fmt::Display for SimInstr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BR(cc, off) => {
+                if cc != &0 {
+                    write!(f, "BR")?;
+                    if cc & 0b100 != 0 { f.write_char('n')?; };
+                    if cc & 0b010 != 0 { f.write_char('z')?; };
+                    if cc & 0b001 != 0 { f.write_char('p')?; };
+                } else {
+                    write!(f, "NOP")?;
+                }
+                
+                write!(f, " {off}")
+            },
+            Self::ADD(dr, sr1, sr2) => write!(f, "ADD {dr}, {sr1}, {sr2}"),
+            Self::LD(dr, off) => write!(f, "LD {dr}, {off}"),
+            Self::ST(sr, off) => write!(f, "ST {sr}, {off}"),
+            Self::JSR(off) => match off {
+                ImmOrReg::Imm(imm) => write!(f, "JSR {imm}"),
+                ImmOrReg::Reg(reg) => write!(f, "JSRR {reg}"),
+            },
+            Self::AND(dr, sr1, sr2) => write!(f, "AND {dr}, {sr1}, {sr2}"),
+            Self::LDR(dr, br, off) => write!(f, "LDR {dr}, {br}, {off}"),
+            Self::STR(sr, br, off) => write!(f, "STR {sr}, {br}, {off}"),
+            Self::RTI   => f.write_str("RTI"),
+            Self::NOT(dr, sr) => write!(f, "NOT {dr}, {sr}"),
+            Self::LDI(dr, off) => write!(f, "LDI {dr}, {off}"),
+            Self::STI(sr, off) => write!(f, "STI {sr}, {off}"),
+            Self::JMP(br) => write!(f, "JMP {br}"),
+            Self::LEA(dr, off) => write!(f, "LEA {dr}, {off}"),
+            Self::TRAP(vect) => write!(f, "TRAP {vect:02X}")
+        }
+    }
 }
 
 impl SimInstr {

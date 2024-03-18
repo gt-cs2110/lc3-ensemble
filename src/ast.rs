@@ -108,7 +108,7 @@ impl<OFF: std::fmt::LowerHex, const N: u32> std::fmt::LowerHex for Offset<OFF, N
 }
 impl<OFF: std::fmt::UpperHex, const N: u32> std::fmt::UpperHex for Offset<OFF, N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_char('X')?;
+        f.write_char('x')?;
         self.0.fmt(f)
     }
 }

@@ -422,7 +422,15 @@ impl Parse for AsmInstr {
                 Ok(Self::STR(dr, br, off))
             },
             Ident::TRAP => Ok(Self::TRAP(parser.parse()?)),
-            Ident::NOP => Ok(Self::NOP),
+            Ident::NOP => {
+                // NOP can optionally accept a parameter.
+                let off = match parser.peek() {
+                    Some((Token::Signed(_) | Token::Unsigned(_) | Token::Ident(Ident::Label(_)), _)) => parser.parse()?,
+                    _ => PCOffset::Offset(Offset::new_trunc(0)),
+                };
+
+                Ok(Self::NOP(off))
+            },
             Ident::GETC => Ok(Self::GETC),
             Ident::OUT => Ok(Self::OUT),
             Ident::PUTC => Ok(Self::PUTC),

@@ -229,7 +229,9 @@ pub enum AsmInstr {
     /// 
     /// # Syntax
     /// - `NOP`
-    NOP,
+    /// - `NOP LABEL` (label is computed, but not used)
+    /// - `NOP #99`
+    NOP(PCOffset9),
 
     /// A GETC instruction.
     /// 
@@ -318,11 +320,15 @@ impl std::fmt::Display for AsmInstr {
             Self::ADD(dr, sr1, sr2) => write!(f, "ADD {dr}, {sr1}, {sr2}"),
             Self::AND(dr, sr1, sr2) => write!(f, "AND {dr}, {sr1}, {sr2}"),
             Self::BR(cc, off) => {
-                write!(f, "BR")?;
-                if cc & 0b100 != 0 { f.write_char('n')?; };
-                if cc & 0b010 != 0 { f.write_char('z')?; };
-                if cc & 0b001 != 0 { f.write_char('p')?; };
-                write!(f, ", {off}")
+                if cc != &0 {
+                    write!(f, "BR")?;
+                    if cc & 0b100 != 0 { f.write_char('n')?; };
+                    if cc & 0b010 != 0 { f.write_char('z')?; };
+                    if cc & 0b001 != 0 { f.write_char('p')?; };
+                } else {
+                    write!(f, "NOP")?;
+                }
+                write!(f, " {off}")
             },
             Self::JMP(br) => write!(f, "JMP {br}"),
             Self::JSR(off) => write!(f, "JSR {off}"),
@@ -338,7 +344,7 @@ impl std::fmt::Display for AsmInstr {
             Self::STI(sr, off) => write!(f, "STI {sr}, {off}"),
             Self::STR(sr, br, off) => write!(f, "STR {sr}, {br}, {off}"),
             Self::TRAP(vect) => write!(f, "TRAP {vect:02X}"),
-            Self::NOP   => f.write_str("NOP"),
+            Self::NOP(off) => write!(f, "NOP {off}"),
             Self::GETC  => f.write_str("GETC"),
             Self::OUT   => f.write_str("OUT"),
             Self::PUTC  => f.write_str("PUTC"),
