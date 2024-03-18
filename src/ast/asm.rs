@@ -450,3 +450,58 @@ pub struct Stmt {
     /// The instruction or directive.
     pub nucleus: StmtKind
 }
+
+/**
+ * Attempts to disassemble bytecode back into assembly instructions.
+ */
+pub fn disassemble(data: &[u16]) -> Vec<Stmt> {
+    data.iter()
+        .copied()
+        .map(|word| {
+            let msi = match word > 0x100 {
+                true  => super::sim::SimInstr::decode(word).ok(),
+                false => None,
+            };
+
+            let nucleus = match msi {
+                Some(si) => {
+                    let ai = match si {
+                        super::sim::SimInstr::BR(cc, off) => AsmInstr::BR(cc, PCOffset::Offset(off)),
+                        super::sim::SimInstr::ADD(dr, sr1, sr2) => AsmInstr::ADD(dr, sr1, sr2),
+                        super::sim::SimInstr::LD(dr, off) => AsmInstr::LD(dr, PCOffset::Offset(off)),
+                        super::sim::SimInstr::ST(sr, off) => AsmInstr::ST(sr, PCOffset::Offset(off)),
+                        super::sim::SimInstr::JSR(off) => match off {
+                            ImmOrReg::Imm(imm) => AsmInstr::JSR(PCOffset::Offset(imm)),
+                            ImmOrReg::Reg(reg) => AsmInstr::JSRR(reg),
+                        },
+                        super::sim::SimInstr::AND(dr, sr1, sr2) => AsmInstr::AND(dr, sr1, sr2),
+                        super::sim::SimInstr::LDR(dr, br, off) => AsmInstr::LDR(dr, br, off),
+                        super::sim::SimInstr::STR(sr, br, off) => AsmInstr::STR(sr, br, off),
+                        super::sim::SimInstr::RTI   => AsmInstr::RTI,
+                        super::sim::SimInstr::NOT(dr, sr) => AsmInstr::NOT(dr, sr),
+                        super::sim::SimInstr::LDI(dr, off) => AsmInstr::LDI(dr, PCOffset::Offset(off)),
+                        super::sim::SimInstr::STI(sr, off) => AsmInstr::STI(sr, PCOffset::Offset(off)),
+                        super::sim::SimInstr::JMP(super::reg_consts::R7) => AsmInstr::RET,
+                        super::sim::SimInstr::JMP(br) => AsmInstr::JMP(br),
+                        super::sim::SimInstr::LEA(dr, off) => AsmInstr::LEA(dr, PCOffset::Offset(off)),
+                        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x20 => AsmInstr::GETC,
+                        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x21 => AsmInstr::PUTC,
+                        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x22 => AsmInstr::PUTS,
+                        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x23 => AsmInstr::IN,
+                        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x24 => AsmInstr::PUTSP,
+                        super::sim::SimInstr::TRAP(vect) if vect.get() == 0x25 => AsmInstr::HALT,
+                        super::sim::SimInstr::TRAP(vect) => AsmInstr::TRAP(vect),
+                    };
+
+                    StmtKind::Instr(ai)
+                },
+                None => {
+                    let fill = Directive::Fill(PCOffset::Offset(super::Offset::new_trunc(word)));
+                    StmtKind::Directive(fill)
+                },
+            };
+
+            Stmt { labels: vec![], nucleus }
+        })
+        .collect()
+}
