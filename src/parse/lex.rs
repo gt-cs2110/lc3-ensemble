@@ -45,8 +45,8 @@ pub enum Token {
     #[regex(r"\.[A-Za-z_]\w*", |lx| lx.slice()[1..].to_string())]
     Directive(String),
 
-    /// A string literal (e.g., `"Hello!`)
-    #[regex(r#"".+[^\\]""#, lex_str_literal)]
+    /// A string literal (e.g., `"Hello!"`)
+    #[regex(r#""(:?[^\\"]|\\.)*""#, lex_str_literal)]
     String(String),
 
     /// A colon, which can optionally appear after labels
