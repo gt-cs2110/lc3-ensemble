@@ -2,7 +2,12 @@
 //! 
 //! This module consists of:
 //! - [`Word`]: A mutable memory location
-//! - [`WordArray`]: An array of memory locations, which can be indexed with non-usize types
+//! - [`Mem`]: The memory
+//! - [`RegFile`]: The register file
+
+use crate::ast::Reg;
+
+use super::SimErr;
 
 /// A memory location that can be read and written to.
 /// 
@@ -76,9 +81,17 @@ impl Word {
     }
     /// Copies the data from one word into another.
     /// 
-    /// This is useful for preserving initialization state.
-    pub fn copy_word(&mut self, word: Word) {
-        *self = word;
+    /// This function is more cognizant of word initialization than [`Word::set`].
+    /// - In non-strict mode, this function preserves the initialization data of the given word.
+    /// - In strict mode, this function verifies the word copied is fully initialized, raising an error if not.
+    pub fn copy_word(&mut self, word: Word, strict: bool, err: SimErr) -> Result<(), SimErr> {
+        match !strict || word.is_init() {
+            true => {
+                *self = word;
+                Ok(())
+            },
+            false => Err(err)
+        }
     }
 }
 impl From<u16> for Word {
@@ -93,7 +106,6 @@ impl From<i16> for Word {
         Word::new_init(value as u16)
     }
 }
-
 /** NOT **/
 impl std::ops::Not for Word {
     type Output = Word;
@@ -235,92 +247,115 @@ impl std::ops::BitAndAssign for Word {
     }
 }
 
-/// Backing type for a word array.
-pub trait ArrayBacking: Sized {
-    /// Gets a reference to the entire slice of words.
-    fn slice(&self) -> &[Word];
-    /// Gets a mutable reference to the entire slice of words.
-    fn slice_mut(&mut self) -> &mut [Word];
-    /// Constructs a new backing.
-    fn new() -> Self;
-}
-impl<const N: usize> ArrayBacking for [Word; N] {
-    fn slice(&self) -> &[Word] {
-        self
-    }
-
-    fn slice_mut(&mut self) -> &mut [Word] {
-        self
-    }
-
-    fn new() -> Self {
-        std::array::from_fn(|_| Word::new_uninit())
+pub(crate) trait AssertInit: Sized {
+    fn is_initialized(&self) -> bool;
+    fn assert_init<E>(self, strict: bool, err: E) -> Result<Self, E> {
+        match !strict || self.is_initialized() {
+            true  => Ok(self),
+            false => Err(err),
+        }
     }
 }
-impl<const N: usize> ArrayBacking for Box<[Word; N]> {
-    fn slice(&self) -> &[Word] {
-        &**self
+impl AssertInit for &Word {
+    fn is_initialized(&self) -> bool {
+        self.is_init()
     }
-
-    fn slice_mut(&mut self) -> &mut [Word] {
-        &mut **self
+}
+impl AssertInit for &mut Word {
+    fn is_initialized(&self) -> bool {
+        self.is_init()
     }
-
-    fn new() -> Self {
-        std::iter::repeat_with(Word::new_uninit)
-            .take(N)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap_or_else(|_| unreachable!("exactly {N} words were created"))
+}
+impl AssertInit for Word {
+    fn is_initialized(&self) -> bool {
+        self.is_init()
     }
 }
 
+/// Context behind a memory access.
+#[derive(Clone, Copy)]
+pub struct MemAccessCtx {
+    /// Whether this access is privileged (false = user, true = supervisor)
+    pub privileged: bool
+}
 
-/// Similar to type `[Word; _]`, but also allows indices of types smaller than usize.
-/// 
-/// This is used with the register file to make an array indexable with `Reg`,
-/// and with the memory to make an array indexable with `u16`.
-#[repr(transparent)]
-pub struct WordArray<A, I>(A, std::marker::PhantomData<I>);
-impl<A: ArrayBacking, I: Into<usize>> WordArray<A, I> {
-    /// Creates a new word array with uninitialized memory.
+const N: usize = 2usize.pow(16);
+const USER_RANGE: std::ops::Range<u16> = 0x3000..0xFE00;
+
+/// Memory. This can be addressed with any `u16`.
+#[derive(Debug)]
+pub struct Mem(Box<[Word; N]>);
+impl Mem {
+    /// Creates new uninitialized memory.
     pub fn new() -> Self {
-        Self(A::new(), std::marker::PhantomData)
+        Self({
+            std::iter::repeat_with(Word::new_uninit)
+                .take(N)
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap_or_else(|_| unreachable!("iterator should have had {N} elements"))
+        })
+    }
+
+    /// Copies a block into this memory.
+    pub fn copy_block(&mut self, start: u16, data: &[Word]) {
+        let mem = &mut self.0;
+        let end = start.wrapping_add(data.len() as u16);
+        if start <= end {
+            // contiguous copy
+            let range = (start as usize)..(end as usize);
+            mem[range].copy_from_slice(data);
+        } else {
+            // discontiguous copy
+            let len = start.wrapping_neg() as usize;
+            let (left, right) = data.split_at(len);
+            mem[(start as usize)..].copy_from_slice(left);
+            mem[..(end as usize)].copy_from_slice(right);
+        }
+    }
+
+    /// Fallibly indexes the memory, returning a reference to the word if possible.
+    pub fn index(&self, index: u16, ctx: MemAccessCtx) -> Result<&Word, SimErr> {
+        if !ctx.privileged && !USER_RANGE.contains(&index) { return Err(SimErr::AccessViolation) };
+        Ok(&self.0[usize::from(index)])
+    }
+    /// Fallibly indexes the memory, returning a mutable reference to the word if possible.
+    pub fn index_mut(&mut self, index: u16, ctx: MemAccessCtx) -> Result<&mut Word, SimErr> {
+        if !ctx.privileged && !USER_RANGE.contains(&index) { return Err(SimErr::AccessViolation) };
+        Ok(&mut self.0[usize::from(index)])
     }
 }
-impl<A: ArrayBacking, I: Into<usize>> Default for WordArray<A, I> {
+impl Default for Mem {
     fn default() -> Self {
         Self::new()
     }
 }
-impl<A: ArrayBacking, I: Into<usize>> std::ops::Index<I> for WordArray<A, I> {
+
+/// The register file. 
+/// 
+/// This can be addressed with a [`Reg`], using typical array index notation.
+#[derive(Debug)]
+pub struct RegFile([Word; 8]);
+impl RegFile {
+    /// Creates a register file with uninitialized data.
+    pub fn new() -> Self {
+        Self(std::array::from_fn(|_| Word::new_uninit()))
+    }
+}
+impl std::ops::Index<Reg> for RegFile {
     type Output = Word;
 
-    fn index(&self, index: I) -> &Self::Output {
-        &self.0.slice()[index.into()]
+    fn index(&self, index: Reg) -> &Self::Output {
+        &self.0[usize::from(index)]
     }
 }
-impl<A: ArrayBacking, I: Into<usize>> std::ops::IndexMut<I> for WordArray<A, I> {
-    fn index_mut(&mut self, index: I) -> &mut Self::Output {
-        &mut self.0.slice_mut()[index.into()]
+impl std::ops::IndexMut<Reg> for RegFile {
+    fn index_mut(&mut self, index: Reg) -> &mut Self::Output {
+        &mut self.0[usize::from(index)]
     }
 }
-impl<A: ArrayBacking, I: Into<usize>> std::ops::Deref for WordArray<A, I> {
-    type Target = [Word];
-
-    fn deref(&self) -> &Self::Target {
-        self.0.slice()
-    }
-}
-impl<A: ArrayBacking, I: Into<usize>> std::ops::DerefMut for WordArray<A, I> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.slice_mut()
-    }
-}
-impl<A: ArrayBacking, I> std::fmt::Debug for WordArray<A, I> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list()
-            .entries(self.0.slice())
-            .finish()
+impl Default for RegFile {
+    fn default() -> Self {
+        Self::new()
     }
 }
