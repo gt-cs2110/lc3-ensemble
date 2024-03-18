@@ -270,15 +270,18 @@ impl AssertInit for Word {
 
 /// Context behind a memory access.
 #[derive(Clone, Copy)]
-pub struct MemAccessCtx {
+pub struct MemAccessCtx<'ctx> {
     /// Whether this access is privileged (false = user, true = supervisor)
     pub privileged: bool,
     /// Whether writes to memory should follow strict rules 
     /// (no writing partially or fully uninitialized data)
-    pub strict: bool
+    pub strict: bool,
+    /// IO access device
+    pub io: &'ctx super::io::SimIO
 }
 
 const N: usize = 2usize.pow(16);
+const IO_START: u16 = 0xFE00;
 const USER_RANGE: std::ops::Range<u16> = 0x3000..0xFE00;
 
 /// Memory. This can be addressed with any `u16`.
@@ -287,13 +290,17 @@ pub struct Mem(Box<[Word; N]>);
 impl Mem {
     /// Creates new uninitialized memory.
     pub fn new() -> Self {
-        Self({
+        let mut mem = Self({
             std::iter::repeat_with(Word::new_uninit)
                 .take(N)
                 .collect::<Vec<_>>()
                 .try_into()
                 .unwrap_or_else(|_| unreachable!("iterator should have had {N} elements"))
-        })
+        });
+        // clear out IO section
+        mem.copy_block(IO_START, &[Word::new_init(0); IO_START.wrapping_neg() as usize]);
+        
+        mem
     }
 
     /// Copies a block into this memory.
@@ -314,15 +321,31 @@ impl Mem {
     }
 
     /// Fallibly gets the word at the provided index, erroring if not possible.
-    pub fn get(&self, index: u16, ctx: MemAccessCtx) -> Result<Word, SimErr> {
-        if !ctx.privileged && !USER_RANGE.contains(&index) { return Err(SimErr::AccessViolation) };
-        Ok(self.0[usize::from(index)])
+    pub fn get(&mut self, addr: u16, ctx: MemAccessCtx) -> Result<Word, SimErr> {
+        if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
+
+        if addr >= IO_START {
+            if let Some(new_data) = ctx.io.io_read(addr) {
+                self.0[usize::from(addr)].set(new_data);
+            }
+        }
+        Ok(self.0[usize::from(addr)])
     }
     /// Fallibly attempts to set at the provided index, erroring if not possible.
-    pub fn set(&mut self, index: u16, data: Word, ctx: MemAccessCtx) -> Result<(), SimErr> {
-        if !ctx.privileged && !USER_RANGE.contains(&index) { return Err(SimErr::AccessViolation) };
+    pub fn set(&mut self, addr: u16, data: Word, ctx: MemAccessCtx) -> Result<(), SimErr> {
+        if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
         
-        self.0[usize::from(index)].copy_word(data, ctx.strict, SimErr::StrictMemSetUninit)
+        data.assert_init(ctx.strict, SimErr::StrictMemSetUninit)?;
+
+        let write_to_mem = if addr >= IO_START {
+            ctx.io.io_write(addr, data.get())
+        } else {
+            true
+        };
+        if write_to_mem {
+            self.0[usize::from(addr)].set(data.get());
+        }
+        Ok(())
     }
 }
 impl Default for Mem {
