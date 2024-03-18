@@ -57,10 +57,12 @@ impl SimIO {
             let buf = stdin().lock().fill_buf().unwrap().to_vec();
             for byte in buf {
                 let result = kb_send.send(byte);
-                kbs.store(true, Ordering::Relaxed);
-
+                
                 match result {
-                    Ok(_)  => stdin().lock().consume(1),
+                    Ok(_) => {
+                        stdin().lock().consume(1);
+                        kbs.store(true, Ordering::Relaxed);
+                    },
                     Err(_) => return,
                 }
             }
@@ -70,8 +72,8 @@ impl SimIO {
         let display_handler = std::thread::spawn(move || loop {
             dss.store(true, Ordering::Relaxed);
             let result = ds_recv.recv();
-            
             dss.store(false, Ordering::Release);
+            
             match result {
                 Ok(b) => {
                     stdout().write_all(&[b]).unwrap();
