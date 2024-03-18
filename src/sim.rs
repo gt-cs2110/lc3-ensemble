@@ -202,13 +202,13 @@ impl Simulator {
         }
 
         // Push PSR, PC to supervisor stack
-        let mut sp = self.reg_file[R6];
+        let sp = &mut self.reg_file[R6];
         let old_psr = self.psr;
         let old_pc = self.pc;
         
-        sp -= 1u16;
+        *sp -= 1u16;
         self.mem[sp.get_unsigned()].set(old_psr);
-        sp -= 1u16;
+        *sp -= 1u16;
         self.mem[sp.get_unsigned()].set(old_pc);
         
         self.psr &= 0x7FFF; // set privileged
@@ -305,14 +305,14 @@ impl Simulator {
             },
             SimInstr::RTI => {
                 if self.is_privileged() {
-                    let mut sp = assert_init!(self.reg_file[R6], self.strict, SimErr::StrictMemAddrUninit)?;
+                    let sp = assert_init!(&mut self.reg_file[R6], self.strict, SimErr::StrictMemAddrUninit)?;
 
                     let pc  = assert_init!(self.mem[sp.get_unsigned()], self.strict, SimErr::StrictJmpAddrUninit)?
                         .get_unsigned();
-                    sp += 1u16;
+                    *sp += 1u16;
                     let psr = assert_init!(self.mem[sp.get_unsigned()], self.strict, SimErr::StrictPSRSetUninit)?
                         .get_unsigned();
-                    sp += 1u16;
+                    *sp += 1u16;
 
                     self.pc = pc;
                     self.psr = psr;
