@@ -9,6 +9,7 @@
 
 pub mod mem;
 mod io;
+pub mod debug;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -19,6 +20,7 @@ use crate::ast::sim::SimInstr;
 use crate::ast::ImmOrReg;
 pub use io::*;
 
+use self::debug::Breakpoint;
 use self::mem::{AssertInit as _, Mem, MemAccessCtx, RegFile, Word};
 
 /// Errors that can occur during simulation.
@@ -119,7 +121,10 @@ pub struct Simulator {
 
     /// Machine control.
     /// If unset, the program stops.
-    pub mcr: Arc<AtomicBool>
+    pub mcr: Arc<AtomicBool>,
+
+    /// Any breakpoints to check for.
+    pub breakpoints: Vec<Breakpoint>
 }
 
 impl Simulator {
@@ -135,7 +140,8 @@ impl Simulator {
             strict: false,
             io: None,
             alloca: Box::new([]),
-            mcr: Arc::new(AtomicBool::new(false))
+            mcr: Arc::new(AtomicBool::new(false)),
+            breakpoints: vec![]
         }
     }
 
@@ -288,16 +294,25 @@ impl Simulator {
         use std::sync::atomic::Ordering;
 
         self.mcr.store(true, Ordering::Relaxed);
+
+        // event loop
         while self.mcr.load(Ordering::Relaxed) {
+            // if any breakpoints are hit, then stop
+            if self.breakpoints.iter().any(|bp| bp.check(self)) {
+                break;
+            }
+
             match self.step_in() {
-                Err(SimErr::ProgramHalted) => {
+                Ok(_) => {},
+                Err(SimErr::ProgramHalted) => break,
+                Err(e) => {
                     self.mcr.store(false, Ordering::Release);
-                    break;
-                },
-                e => e?
+                    return Err(e);
+                }
             }
         }
 
+        self.mcr.store(false, Ordering::Release);
         Ok(())
     }
     /// Perform one step through the simulator's execution.
