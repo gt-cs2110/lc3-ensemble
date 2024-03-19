@@ -19,7 +19,7 @@ use logos::Span;
 use crate::ast::asm::{AsmInstr, Directive, Stmt, StmtKind};
 use crate::ast::sim::SimInstr;
 use crate::ast::{IOffset, ImmOrReg, Offset, OffsetNewErr, PCOffset, Reg};
-use crate::err::Spanned;
+use crate::err::ErrSpanned;
 use crate::sim::mem::Word;
 
 
@@ -113,7 +113,7 @@ impl std::fmt::Display for AsmErrKind {
 }
 
 /// Error from assembling given assembly code.
-pub type AsmErr = Spanned<AsmErrKind>;
+pub type AsmErr = ErrSpanned<AsmErrKind>;
 impl std::error::Error for AsmErr {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self.value {
@@ -172,7 +172,7 @@ impl SymbolTable {
                     match labels.entry(label.label.to_uppercase()) {
                         Entry::Occupied(e) => {
                             let (_, span1) = e.get();
-                            return Err(AsmErr::new(AsmErrKind::OverlappingLabels, vec![span1.clone(), label.span.clone()]))
+                            return Err(AsmErr::new(AsmErrKind::OverlappingLabels, [span1.clone(), label.span.clone()]))
                         },
                         Entry::Vacant(e) => e.insert((addr, label.span.clone())),
                     };
@@ -183,7 +183,7 @@ impl SymbolTable {
                 StmtKind::Instr(_) => lc.map(|(addr, span)| (addr.wrapping_add(1), span)),
                 StmtKind::Directive(d) => match d {
                     Directive::Orig(addr) => match lc {
-                        Some((_, span)) => return Err(AsmErr::new(AsmErrKind::OverlappingOrig, vec![span, stmt.span.clone()])),
+                        Some((_, span)) => return Err(AsmErr::new(AsmErrKind::OverlappingOrig, [span, stmt.span.clone()])),
                         None => Some((addr.get(), stmt.span.clone()))
                     },
                     Directive::Fill(_) => lc.map(|(addr, span)| (addr.wrapping_add(1), span)),
@@ -347,7 +347,7 @@ impl ObjectFile {
             if let Some((&prev_start, (prev_words, prev_span))) = prev_block {
                 // check if this block overlaps with the previous block
                 if (start.wrapping_sub(prev_start) as usize) < prev_words.len() {
-                    return Err(AsmErr::new(AsmErrKind::OverlappingBlocks, vec![prev_span.clone(), start_span]));
+                    return Err(AsmErr::new(AsmErrKind::OverlappingBlocks, [prev_span.clone(), start_span]));
                 }
             }
 

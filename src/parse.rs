@@ -106,7 +106,7 @@ impl std::error::Error for ParseErr {
 }
 impl crate::err::Error for ParseErr {
     fn span(&self) -> Option<crate::err::ErrSpan> {
-        Some(crate::err::ErrSpan::Range(self.span.clone()))
+        Some(crate::err::ErrSpan::from(self.span.clone()))
     }
         
     fn help(&self) -> Option<Cow<str>> {

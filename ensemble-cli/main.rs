@@ -69,9 +69,9 @@ fn report_error<E: lc3_ensemble::err::Error>(err: E, meta: &SourceMetadata) -> s
                 .with_message(&err);
 
             match span {
-                ErrSpan::Range(r) => {
+                ErrSpan::One(r) => {
                     report = report.with_label({
-                        let mut label = Label::new((&*meta.name, r.clone()))
+                        let mut label = Label::new((&*meta.name, r))
                             .with_color(colors.next());
                         
                         if let Some(help) = err.help() {
@@ -81,9 +81,26 @@ fn report_error<E: lc3_ensemble::err::Error>(err: E, meta: &SourceMetadata) -> s
                         label
                     });
                 },
-                ErrSpan::ManyRange(mr) => {
+                ErrSpan::Two([r0, r1]) => {
+                    report = report
+                        .with_label({
+                            Label::new((&*meta.name, r0))
+                                    .with_color(colors.next())
+                                    .with_message("")
+                        })
+                        .with_label({
+                            Label::new((&*meta.name, r1))
+                                    .with_color(colors.next())
+                                    .with_message("")
+                        });
+
+                    if let Some(help) = err.help() {
+                        report.set_help(help);
+                    }
+                },
+                ErrSpan::Many(mr) => {
                     report = report.with_labels({
-                        mr.iter()
+                        mr.into_iter()
                             .map(|s| {
                                 Label::new((&*meta.name, s.clone()))
                                     .with_color(colors.next())

@@ -1,7 +1,8 @@
 //! Error interfaces for this crate.
 
 use std::borrow::Cow;
-use std::ops::Range;
+
+use logos::Span;
 
 pub use crate::asm::AsmErr;
 pub use crate::ast::OffsetNewErr;
@@ -29,76 +30,123 @@ pub trait Error: std::error::Error {
     fn help(&self) -> Option<Cow<str>>;
 }
 
-/// A value that has an associated span.
+/// A value that has an associated error span.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Spanned<K> {
+pub struct ErrSpanned<K> {
     /// The value with a span.
     pub value: K,
 
     /// The span in the source associated with this value.
     pub span: ErrSpan
 }
-impl<K> Spanned<K> {
+impl<K> ErrSpanned<K> {
+    /// Creates a new error-spanned value.
     pub fn new<R: Into<ErrSpan>>(value: K, span: R) -> Self {
-        Spanned { value, span: span.into() }
+        ErrSpanned { value, span: span.into() }
     }
 }
-impl<K: std::fmt::Display> std::fmt::Display for Spanned<K> {
+impl<K: std::fmt::Display> std::fmt::Display for ErrSpanned<K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.value.fmt(f)
     }
 }
 
+/// The possible source ranges for an error. 
+/// 
+/// This can be:
+/// - one contiguous span,
+/// - two contiguous spans, or
+/// - three or more contiguous spans
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ErrSpan {
-    Range(Range<usize>),
-    ManyRange(Vec<Range<usize>>)
+    /// One contiguous span.
+    One(Span),
+    /// Two contiguous spans.
+    Two([Span; 2]),
+    /// Three or more contiguous spans.
+    /// 
+    /// This should always have at least 3 elements.
+    Many(Vec<Span>)
 }
 impl ErrSpan {
-    pub fn first(&self) -> &Range<usize> {
+    /// Gets the first span.
+    pub fn first(&self) -> Span {
         match self {
-            ErrSpan::Range(r) => r,
-            ErrSpan::ManyRange(mr) => mr.first().unwrap(),
+            ErrSpan::One(r)      => r.clone(),
+            ErrSpan::Two([r, _]) => r.clone(),
+            ErrSpan::Many(r)     => r.first().unwrap().clone(),
         }
     }
-    pub fn iter(&self) -> impl Iterator<Item=&Range<usize>> {
+
+    /// Gets an iterator over all of the spans.
+    pub fn iter(&self) -> impl Iterator<Item=&Span> {
         match self {
-            ErrSpan::Range(r) => std::slice::from_ref(r).iter(),
-            ErrSpan::ManyRange(mr) => mr.iter(),
+            ErrSpan::One(r)  => std::slice::from_ref(r).iter(),
+            ErrSpan::Two(r)  => r.iter(),
+            ErrSpan::Many(r) => r.iter(),
         }
     }
 }
-impl Extend<Range<usize>> for ErrSpan {
-    fn extend<T: IntoIterator<Item = Range<usize>>>(&mut self, iter: T) {
-        match self {
-            ErrSpan::Range(r) => {
-                let mut mr = vec![std::mem::replace(r, 0..0)];
-                mr.extend(iter);
-                *self = ErrSpan::ManyRange(mr);
+impl Extend<Span> for ErrSpan {
+    fn extend<T: IntoIterator<Item = Span>>(&mut self, iter: T) {
+        let mut iter = iter.into_iter();
+
+        // It's 4:30AM and I thought it'd be funny.
+        loop {
+            match self {
+                ErrSpan::One(r0) => {
+                    let Some(r1) = iter.next() else { return };
+                    let r0 = std::mem::replace(r0, 0..0);
+                    *self = ErrSpan::Two([r0, r1]);
+                },
+                ErrSpan::Two([r0, r1]) => {
+                    let Some(r2) = iter.next() else { return };
+                    let r0 = std::mem::replace(r0, 0..0);
+                    let r1 = std::mem::replace(r1, 0..0);
+                    *self = ErrSpan::Many(vec![r0, r1, r2]);
+                },
+                ErrSpan::Many(mr) => {
+                    mr.extend(iter);
+                    return;
+                },
+            }
+        }
+    }
+}
+impl From<Span> for ErrSpan {
+    fn from(value: Span) -> Self {
+        ErrSpan::One(value)
+    }
+}
+impl From<[Span; 2]> for ErrSpan {
+    fn from(value: [Span; 2]) -> Self {
+        ErrSpan::Two(value)
+    }
+}
+impl From<Vec<Span>> for ErrSpan {
+    fn from(value: Vec<Span>) -> Self {
+        match Box::<[_; 1]>::try_from(value) {
+            Ok(rbox) => {
+                let [r] = *rbox;
+                ErrSpan::One(r)
             },
-            ErrSpan::ManyRange(mr) => mr.extend(iter),
+            Err(value) => match Box::try_from(value) {
+                Ok(rbox) => ErrSpan::Two(*rbox),
+                Err(value) => ErrSpan::Many(value)
+            }
         }
-    }
-}
-impl From<Range<usize>> for ErrSpan {
-    fn from(value: Range<usize>) -> Self {
-        ErrSpan::Range(value)
-    }
-}
-impl From<Vec<Range<usize>>> for ErrSpan {
-    fn from(value: Vec<Range<usize>>) -> Self {
-        ErrSpan::ManyRange(value)
     }
 }
 impl From<Vec<ErrSpan>> for ErrSpan {
     fn from(value: Vec<ErrSpan>) -> Self {
-        let mr = value.into_iter()
+        let mr: Vec<_> = value.into_iter()
             .flat_map(|r| match r {
-                ErrSpan::Range(r) => vec![r],
-                ErrSpan::ManyRange(r) => r,
+                ErrSpan::One(r) => vec![r],
+                ErrSpan::Two(r) => r.to_vec(),
+                ErrSpan::Many(r) => r,
             })
             .collect();
 
-        ErrSpan::ManyRange(mr)
+        ErrSpan::from(mr)
     }
 }
