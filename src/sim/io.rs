@@ -13,6 +13,7 @@ const KBSR: u16 = 0xFE00;
 const KBDR: u16 = 0xFE02;
 const DSR: u16  = 0xFE04;
 const DDR: u16  = 0xFE06;
+const MCR: u16  = 0xFFFE;
 
 /// Simulator input/output.
 /// 
@@ -36,11 +37,14 @@ pub struct SimIO {
     display_data: mpsc::Sender<u8>,
     /// The thread where the display's process occurs.
     display_handler: JoinHandle<()>,
+
+    /// The MCR.
+    mcr: Arc<AtomicBool>
 }
 
 impl SimIO {
     /// Creates the IO processes.
-    pub fn new() -> SimIO {
+    pub fn new(mcr: Arc<AtomicBool>) -> SimIO {
         let (kb_send, kb_recv) = mpsc::sync_channel(1);
         let (ds_send, ds_recv) = mpsc::channel();
         
@@ -91,12 +95,14 @@ impl SimIO {
             display_status,
             display_data: ds_send,
             display_handler,
+
+            mcr
         }
     }
 
     /// Closes the keyboard and display channels and waits for the display to complete.
     pub fn join(self) -> std::thread::Result<()> {
-        let Self { kb_status: _, kb_data, kb_handler: _, display_status: _, display_data, display_handler } = self;
+        let Self { kb_status: _, kb_data, kb_handler: _, display_status: _, display_data, display_handler, mcr: _ } = self;
 
         std::mem::drop(kb_data);
         std::mem::drop(display_data);
@@ -110,9 +116,11 @@ impl std::fmt::Debug for SimIO {
         f.debug_struct("SimIO").finish_non_exhaustive()
     }
 }
-impl Default for SimIO {
-    fn default() -> Self {
-        Self::new()
+/// Converts boolean data to a register word
+fn io_bool_data(b: bool) -> u16 {
+    match b {
+        true  => 0x8000,
+        false => 0x0000,
     }
 }
 
@@ -132,10 +140,7 @@ pub trait IODevice {
 impl IODevice for SimIO {
     fn io_read(&self, addr: u16) -> Option<u16> {
         match addr {
-            KBSR => match self.kb_status.load(Ordering::Relaxed) {
-                true  => Some(0x8000),
-                false => Some(0x0000),
-            },
+            KBSR => Some(io_bool_data(self.kb_status.load(Ordering::Relaxed))),
             KBDR => match self.kb_data.try_recv() {
                 Ok(b) => {
                     self.kb_status.store(false, Ordering::Release);
@@ -144,10 +149,8 @@ impl IODevice for SimIO {
                 Err(TryRecvError::Empty) => None,
                 Err(TryRecvError::Disconnected) => None, // unreachable: keyboard disconnected
             },
-            DSR => match self.display_status.load(Ordering::Acquire) {
-                true  => Some(0x8000),
-                false => Some(0x0000)
-            }
+            DSR => Some(io_bool_data(self.display_status.load(Ordering::Acquire))),
+            MCR => Some(io_bool_data(self.mcr.load(Ordering::Relaxed))),
             _ => None
         }
     }
@@ -155,6 +158,11 @@ impl IODevice for SimIO {
     fn io_write(&self, addr: u16, data: u16) -> bool {
         match addr {
             DDR => self.display_data.send(data as u8).is_ok(),
+            MCR => {
+                // store whether last bit is 1 (e.g., if data is negative)
+                self.mcr.store((data as i16) < 0, Ordering::Relaxed);
+                true
+            }
             _ => false
         }
     }

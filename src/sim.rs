@@ -10,6 +10,9 @@
 pub mod mem;
 mod io;
 
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+
 use crate::asm::ObjectFile;
 use crate::ast::reg_consts::{R6, R7};
 use crate::ast::sim::SimInstr;
@@ -112,7 +115,11 @@ pub struct Simulator {
     /// Keeps track of allocated blocks in the current object file.
     /// Loading and setting to an allocated block does not 
     /// cause register/memory strictness errors.
-    alloca: Box<[(u16, u16)]>
+    alloca: Box<[(u16, u16)]>,
+
+    /// Machine control.
+    /// If unset, the program stops.
+    pub mcr: Arc<AtomicBool>
 }
 
 impl Simulator {
@@ -127,7 +134,8 @@ impl Simulator {
             sr_entered: 0,
             strict: false,
             io: None,
-            alloca: Box::new([])
+            alloca: Box::new([]),
+            mcr: Arc::new(AtomicBool::new(false))
         }
     }
 
@@ -138,7 +146,7 @@ impl Simulator {
         use crate::parse::parse_ast;
         use crate::asm::assemble;
 
-        self.io.replace(io::SimIO::new());
+        self.io.replace(io::SimIO::new(Arc::clone(&self.mcr)));
 
         let os_file = include_str!("os.asm");
         let ast = parse_ast(os_file).unwrap();
@@ -274,11 +282,23 @@ impl Simulator {
         let addr = self.mem.get(vect, self.mem_ctx(&self.io))?;
         self.set_pc(addr)
     }
-    /// Start the simulator's execution.
-    pub fn start(&mut self) -> Result<(), SimErr> {
-        loop {
-            self.step_in()?;
+
+    /// Execute the program.
+    pub fn run(&mut self) -> Result<(), SimErr> {
+        use std::sync::atomic::Ordering;
+
+        self.mcr.store(true, Ordering::Relaxed);
+        while self.mcr.load(Ordering::Relaxed) {
+            match self.step_in() {
+                Err(SimErr::ProgramHalted) => {
+                    self.mcr.store(false, Ordering::Release);
+                    break;
+                },
+                e => e?
+            }
         }
+
+        Ok(())
     }
     /// Perform one step through the simulator's execution.
     pub fn step_in(&mut self) -> Result<(), SimErr> {
