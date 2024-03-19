@@ -164,7 +164,7 @@ impl crate::err::Error for AsmErr {
 
 /// The symbol table created in the first assembler pass
 /// that maps each label to its corresponding address.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct SymbolTable {
     /// A mapping from label to address and span of the label.
     labels: HashMap<String, (u16, Span)>
@@ -256,7 +256,24 @@ impl SymbolTable {
         self.labels.get(&label.to_uppercase()).map(|&(addr, _)| addr)
     }
 }
+impl std::fmt::Debug for SymbolTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct Addr(u16);
+        impl std::fmt::Debug for Addr {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "x{:04X}", self.0)
+            }
+        }
 
+        f.write_str("SymbolTable ")?;
+        f.debug_map()
+            .entries({
+                self.labels.iter()
+                    .map(|(k, &(addr, ref span))| (k, (Addr(addr), span)))
+            })
+            .finish()
+    }
+}
 
 /// Replaces a [`PCOffset`] value with an [`Offset`] value by calculating the offset from a given label
 /// (if this `PCOffset` represents a label).
