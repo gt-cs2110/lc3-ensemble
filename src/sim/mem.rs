@@ -345,20 +345,16 @@ impl Mem {
     pub fn set(&mut self, addr: u16, data: Word, ctx: MemAccessCtx) -> Result<(), SimErr> {
         if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
         
-        // FIXME:
-        // Setting memory to something uninitialized is not wrong behavior.
-        // If a register started off uninitialized, storing it (such as what you'd do for stack push),
-        // shouldn't be considered incorrect.
-
-        // data.assert_init(ctx.strict, SimErr::StrictMemSetUninit)?;
-
         let write_to_mem = if addr >= IO_START {
-            ctx.io.io_write(addr, data.get())
+            let io_data = data.assert_init(ctx.strict, SimErr::StrictIOSetUninit)?
+                .get();
+            ctx.io.io_write(addr, io_data)
         } else {
             true
         };
         if write_to_mem {
-            self.0[usize::from(addr)].set(data.get());
+            self.0[usize::from(addr)]
+                .copy_word(data, false, SimErr::ProgramHalted /* unreachable */)?;
         }
         Ok(())
     }

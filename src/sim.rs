@@ -34,8 +34,8 @@ pub enum SimErr {
     ProgramHalted,
     /// A register was loaded with a partially uninitialized value.
     StrictRegSetUninit,
-    /// Data was stored into memory with a partially uninitialized value.
-    StrictMemSetUninit,
+    /// Data was stored into MMIO with a partially uninitialized value.
+    StrictIOSetUninit,
     /// Address to jump to is coming from an uninitialized value.
     StrictJmpAddrUninit,
     /// Address to read from memory is coming from an uninitialized value.
@@ -88,7 +88,7 @@ pub struct Simulator {
     /// This is an Option because it is only enabled when the OS is active.
     /// It is also an Option so that closing it (via [`Simulator::close_io`]) 
     /// does not require closing the entire Simulator.
-    io: Option<io::SimIO>,
+    pub io: Option<io::SimIO>,
 }
 
 impl Simulator {
@@ -157,23 +157,7 @@ impl Simulator {
 
     /// Sets the PC to the given address, raising any errors that occur.
     pub fn set_pc(&mut self, addr_word: Word) -> Result<(), SimErr> {
-        let addr = addr_word.get();
-        
-        if self.strict {
-            // Check PC address is initialized:
-            if !addr_word.is_init() { return Err(SimErr::StrictJmpAddrUninit) };
-            
-            // Check data at PC is initialized:
-            
-            // FIXME:
-            // This unconditionally assumes that the PC's data will always be read, however
-            // PC* before execute may not always be read, so this check is incorrect.
-            // Could be checked for JMP/JSR though?
-
-            // let data = self.mem.get(addr, self.mem_ctx(&self.io))?;
-            // if !data.is_init() { return Err(SimErr::StrictPCMemUninit) };
-        }
-
+        let addr = addr_word.assert_init(self.strict, SimErr::StrictJmpAddrUninit)?.get();
         self.pc = addr;
         Ok(())
     }
@@ -240,9 +224,11 @@ impl Simulator {
     }
     /// Perform one step through the simulator's execution.
     pub fn step_in(&mut self) -> Result<(), SimErr> {
-        let word = self.mem.get(self.pc, self.mem_ctx(&self.io))?.get();
+        let word = self.mem.get(self.pc, self.mem_ctx(&self.io))?
+            .assert_init(self.strict, SimErr::StrictPCMemUninit)?
+            .get();
         let instr = SimInstr::decode(word)?;
-        
+
         self.offset_pc(1)?;
 
         match instr {
