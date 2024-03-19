@@ -3,8 +3,9 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use ariadne::{Color, ColorGenerator, Config, FileCache, Fmt, Label, Report, ReportKind, Source};
+use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
 use clap::Parser;
+use lc3_ensemble::asm::assemble;
 use lc3_ensemble::parse::parse_ast;
 
 #[derive(Parser)]
@@ -52,7 +53,8 @@ fn main() -> ExitCode {
     }
 
     let ast = handle!(parse_ast(&src));
-
+    let obj = handle!(assemble(ast));
+    
     // assemble(ast)
     ExitCode::SUCCESS
 }
@@ -78,15 +80,18 @@ fn report_error<E: lc3_ensemble::err::Error>(err: E, meta: &SourceMetadata) -> s
                 .eprint((&*meta.name, meta.src.clone()))
         },
         None => {
-            let mut report = Report::<Range<_>>::build(ReportKind::Error, (), 0)
+            let mut report = Report::build(ReportKind::Error, &*meta.name, 0)
                 .with_message(&err);
             
             if let Some(help) = err.help() {
-                report.set_help(help);
-            }
+                report = report
+                    .with_label(Label::new((&*meta.name, 0..0)))
+                    .with_help(help)
+            };
 
-            report.finish()
-                .eprint(Source::from(""))
+            report
+                .finish()
+                .eprint((&*meta.name, Source::from("")))
         },
     }
 }

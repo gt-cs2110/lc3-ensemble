@@ -45,12 +45,12 @@ pub fn assemble(ast: Vec<Stmt>) -> Result<ObjectFile, AsmErr> {
                 obj.push(start, words)?;
             },
             StmtKind::Directive(directive) => {
-                let Some((lc, block)) = &mut current else { return Err(AsmErr::CannotDetAddress) };
+                let Some((lc, block)) = &mut current else { return Err(AsmErr::UndetAddrStmt) };
                 let n = directive.write_directive(&sym, block)?;
                 *lc = lc.wrapping_add(n);
             },
             StmtKind::Instr(instr) => {
-                let Some((lc, block)) = &mut current else { return Err(AsmErr::CannotDetAddress) };
+                let Some((lc, block)) = &mut current else { return Err(AsmErr::UndetAddrStmt) };
                 let sim = instr.into_sim_instr(*lc, &sym)?;
                 block.push(sim.encode());
                 *lc = lc.wrapping_add(1);
@@ -63,8 +63,10 @@ pub fn assemble(ast: Vec<Stmt>) -> Result<ObjectFile, AsmErr> {
 /// Error from assembling given assembly code.
 #[derive(Debug)]
 pub enum AsmErr {
-    /// Cannot determine address of label or instruction (pass 1 and 2).
-    CannotDetAddress,
+    /// Cannot determine address of label (pass 1).
+    UndetAddrLabel,
+    /// Cannot determine address of instruction (pass 2).
+    UndetAddrStmt,
     /// There was an `.orig` but no corresponding `.end` (pass 1).
     UnclosedOrig,
     /// There was an `.end` but no corresonding `.orig` (pass 1).
@@ -81,6 +83,46 @@ pub enum AsmErr {
     CouldNotFindLabel,
     /// Block is way too large (pass 2).
     ExcessiveBlock,
+}
+impl std::fmt::Display for AsmErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AsmErr::UndetAddrLabel    => f.write_str("cannot determine address of label"),
+            AsmErr::UndetAddrStmt     => f.write_str("cannot determine address of statement"),
+            AsmErr::UnclosedOrig      => f.write_str(".orig directive was never closed"),
+            AsmErr::UnopenedOrig      => f.write_str(".end does not have associated .orig"),
+            AsmErr::OverlappingOrig   => f.write_str("cannot have an .orig inside another region"),
+            AsmErr::OverlappingLabels => f.write_str("label was defined multiple times"),
+            AsmErr::OverlappingBlocks => f.write_str("regions would overlap in memory"),
+            AsmErr::OffsetNewErr(e)   => e.fmt(f),
+            AsmErr::CouldNotFindLabel => f.write_str("label does not exist"),
+            AsmErr::ExcessiveBlock    => f.write_str("block is too large"),
+        }
+    }
+}
+impl std::error::Error for AsmErr {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::OffsetNewErr(e) => Some(e),
+            _ => None
+        }
+    }
+}
+impl crate::err::Error for AsmErr {
+    fn help(&self) -> Option<std::borrow::Cow<str>> {
+        match self {
+            AsmErr::UndetAddrLabel    => Some("try moving this label inside of a .orig/.end region".into()),
+            AsmErr::UndetAddrStmt     => Some("try moving this statement inside of a .orig/.end region".into()),
+            AsmErr::UnclosedOrig      => None,
+            AsmErr::UnopenedOrig      => None,
+            AsmErr::OverlappingOrig   => None,
+            AsmErr::OverlappingLabels => Some("labels must be unique within a file, try renaming one of the labels".into()),
+            AsmErr::OverlappingBlocks => None,
+            AsmErr::OffsetNewErr(e)   => e.help(),
+            AsmErr::CouldNotFindLabel => None,
+            AsmErr::ExcessiveBlock    => None,
+        }
+    }
 }
 /// The symbol table created in the first assembler pass
 /// that maps each label to its corresponding address.
@@ -100,7 +142,7 @@ impl SymbolTable {
         for stmt in stmts {
             // Add labels if they exist
             if !stmt.labels.is_empty() {
-                let Some(addr) = lc else { return Err(AsmErr::CannotDetAddress) };
+                let Some(addr) = lc else { return Err(AsmErr::UndetAddrLabel) };
 
                 for label in &stmt.labels {
                     match labels.entry(label.to_uppercase()) {
