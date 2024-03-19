@@ -129,7 +129,7 @@ impl Simulator {
     
     /// Loads an object file into this simulator.
     pub fn load_obj_file(&mut self, obj: &ObjectFile) {
-        for (&start, words) in obj.iter() {
+        for (start, words) in obj.iter() {
             self.mem.copy_block(start, words);
         }
     }

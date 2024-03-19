@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
 use clap::Parser;
 use lc3_ensemble::asm::assemble;
+use lc3_ensemble::err::ErrSpan;
 use lc3_ensemble::parse::parse_ast;
 
 #[derive(Parser)]
@@ -64,18 +65,39 @@ fn report_error<E: lc3_ensemble::err::Error>(err: E, meta: &SourceMetadata) -> s
 
     match err.span() {
         Some(span) => {
-            Report::build(ReportKind::Error, &*meta.name, span.clone().start)
-                .with_message(&err)
-                .with_label({
-                    let mut label = Label::new((&*meta.name, span.clone()))
-                        .with_color(colors.next());
-                    
-                    if let Some(help) = err.help() {
-                        label = label.with_message(help);
-                    }
+            let mut report = Report::build(ReportKind::Error, &*meta.name, span.first().start)
+                .with_message(&err);
 
-                    label
-                })
+            match span {
+                ErrSpan::Range(r) => {
+                    report = report.with_label({
+                        let mut label = Label::new((&*meta.name, r.clone()))
+                            .with_color(colors.next());
+                        
+                        if let Some(help) = err.help() {
+                            label = label.with_message(help);
+                        }
+    
+                        label
+                    });
+                },
+                ErrSpan::ManyRange(mr) => {
+                    report = report.with_labels({
+                        mr.iter()
+                            .map(|s| {
+                                Label::new((&*meta.name, s.clone()))
+                                    .with_color(colors.next())
+                                    .with_message("")
+                            })
+                    });
+
+                    if let Some(help) = err.help() {
+                        report.set_help(help);
+                    }
+                },
+            }
+            
+            report
                 .finish()
                 .eprint((&*meta.name, meta.src.clone()))
         },

@@ -6,6 +6,8 @@ pub mod sim;
 use std::fmt::Write as _;
 use offset_base::OffsetBacking;
 
+use self::asm::SpannedLabel;
+
 /// A register. Must be between 0 and 7.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Reg(pub(crate) u8);
@@ -114,7 +116,7 @@ impl<OFF: std::fmt::UpperHex, const N: u32> std::fmt::UpperHex for Offset<OFF, N
 }
 
 /// The errors that can result from calling `Offset::new`.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum OffsetNewErr {
     /// The provided offset cannot fit an unsigned integer of the given bitsize.
     CannotFitUnsigned(u32),
@@ -239,7 +241,7 @@ pub enum PCOffset<OFF, const N: u32> {
     #[allow(missing_docs)]
     Offset(Offset<OFF, N>),
     #[allow(missing_docs)]
-    Label(String)
+    Label(SpannedLabel)
 }
 impl<OFF, const N: u32> std::fmt::Display for PCOffset<OFF, N> 
     where Offset<OFF, N>: std::fmt::Display

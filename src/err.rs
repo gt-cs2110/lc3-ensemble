@@ -19,7 +19,7 @@ pub trait Error: std::error::Error {
     /// The range where this error occurs in source.
     /// 
     /// If this is not known, this can be set to `None`.
-    fn span(&self) -> Option<Range<usize>> {
+    fn span(&self) -> Option<crate::err::ErrSpan> {
         None
     }
 
@@ -27,4 +27,78 @@ pub trait Error: std::error::Error {
     /// 
     /// If there is none to add, this can be set to `None`.
     fn help(&self) -> Option<Cow<str>>;
+}
+
+/// A value that has an associated span.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Spanned<K> {
+    /// The value with a span.
+    pub value: K,
+
+    /// The span in the source associated with this value.
+    pub span: ErrSpan
+}
+impl<K> Spanned<K> {
+    pub fn new<R: Into<ErrSpan>>(value: K, span: R) -> Self {
+        Spanned { value, span: span.into() }
+    }
+}
+impl<K: std::fmt::Display> std::fmt::Display for Spanned<K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ErrSpan {
+    Range(Range<usize>),
+    ManyRange(Vec<Range<usize>>)
+}
+impl ErrSpan {
+    pub fn first(&self) -> &Range<usize> {
+        match self {
+            ErrSpan::Range(r) => r,
+            ErrSpan::ManyRange(mr) => mr.first().unwrap(),
+        }
+    }
+    pub fn iter(&self) -> impl Iterator<Item=&Range<usize>> {
+        match self {
+            ErrSpan::Range(r) => std::slice::from_ref(r).iter(),
+            ErrSpan::ManyRange(mr) => mr.iter(),
+        }
+    }
+}
+impl Extend<Range<usize>> for ErrSpan {
+    fn extend<T: IntoIterator<Item = Range<usize>>>(&mut self, iter: T) {
+        match self {
+            ErrSpan::Range(r) => {
+                let mut mr = vec![std::mem::replace(r, 0..0)];
+                mr.extend(iter);
+                *self = ErrSpan::ManyRange(mr);
+            },
+            ErrSpan::ManyRange(mr) => mr.extend(iter),
+        }
+    }
+}
+impl From<Range<usize>> for ErrSpan {
+    fn from(value: Range<usize>) -> Self {
+        ErrSpan::Range(value)
+    }
+}
+impl From<Vec<Range<usize>>> for ErrSpan {
+    fn from(value: Vec<Range<usize>>) -> Self {
+        ErrSpan::ManyRange(value)
+    }
+}
+impl From<Vec<ErrSpan>> for ErrSpan {
+    fn from(value: Vec<ErrSpan>) -> Self {
+        let mr = value.into_iter()
+            .flat_map(|r| match r {
+                ErrSpan::Range(r) => vec![r],
+                ErrSpan::ManyRange(r) => r,
+            })
+            .collect();
+
+        ErrSpan::ManyRange(mr)
+    }
 }

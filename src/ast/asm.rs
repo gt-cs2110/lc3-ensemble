@@ -445,6 +445,21 @@ impl std::fmt::Display for StmtKind {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SpannedLabel {
+    /// The label
+    pub label: String,
+
+    /// The span in the source associated with the label
+    pub span: std::ops::Range<usize>
+}
+impl std::fmt::Display for SpannedLabel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.label.fmt(f)
+    }
+}
+
 /// A "statement" in LC-3 assembly.
 /// 
 /// While not a defined term in LC-3 assembly, 
@@ -453,9 +468,11 @@ impl std::fmt::Display for StmtKind {
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct Stmt {
     /// The labels.
-    pub labels: Vec<String>,
+    pub labels: Vec<SpannedLabel>,
     /// The instruction or directive.
-    pub nucleus: StmtKind
+    pub nucleus: StmtKind,
+    /// The span of the nucleus.
+    pub span: std::ops::Range<usize>
 }
 impl std::fmt::Display for Stmt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -516,7 +533,7 @@ pub fn disassemble(data: &[u16]) -> Vec<Stmt> {
                 },
             };
 
-            Stmt { labels: vec![], nucleus }
+            Stmt { labels: vec![], nucleus, span: 0..0 }
         })
         .collect()
 }

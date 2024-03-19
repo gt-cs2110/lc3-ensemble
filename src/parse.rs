@@ -12,10 +12,11 @@
 pub mod lex;
 
 use std::borrow::Cow;
+use std::ops::Range;
 
 use logos::{Logos, Span};
 
-use crate::ast::asm::{AsmInstr, Directive, Stmt, StmtKind};
+use crate::ast::asm::{AsmInstr, Directive, SpannedLabel, Stmt, StmtKind};
 use crate::ast::{IOffset, ImmOrReg, Offset, OffsetNewErr, PCOffset};
 use lex::{Ident, Token};
 use simple::*;
@@ -104,8 +105,8 @@ impl std::error::Error for ParseErr {
     }
 }
 impl crate::err::Error for ParseErr {
-    fn span(&self) -> Option<std::ops::Range<usize>> {
-        Some(self.span.clone())
+    fn span(&self) -> Option<crate::err::ErrSpan> {
+        Some(crate::err::ErrSpan::Range(self.span.clone()))
     }
         
     fn help(&self) -> Option<Cow<str>> {
@@ -130,7 +131,8 @@ pub trait Parse: Sized {
 /// The main parser struct, which holds the main logic for the parser.
 pub struct Parser {
     tokens: Vec<(Token, Span)>,
-    index: usize
+    index: usize,
+    spans: Vec<Span>,
 }
 impl Parser {
     /// Creates a new parser from a given string.
@@ -147,7 +149,7 @@ impl Parser {
             .filter(|t| !matches!(t, Ok((Token::Comment, _)))) // filter comments
             .collect::<Result<_, _>>()?;
 
-        Ok(Self { tokens, index: 0 })
+        Ok(Self { tokens, index: 0, spans: vec![] })
     }
 
     /// Peeks at the next token to read.
@@ -156,6 +158,12 @@ impl Parser {
     }
     /// Advances the parser ahead by one token.
     pub fn advance(&mut self) {
+        // Append the last token's span to the last span collector.
+        let last_tok_span = self.cursor();
+        if let Some(last_span) = self.spans.last_mut() {
+            last_span.end = last_tok_span.end;
+        }
+
         self.index += 1;
         self.index = self.index.min(self.tokens.len());
     }
@@ -202,6 +210,22 @@ impl Parser {
         result
     }
 
+    /// Calculates the span of the component created inside this region block.
+    pub fn spanned<T, E>(&mut self, f: impl FnOnce(&mut Parser) -> Result<T, E>) -> Result<(T, Range<usize>), E> {
+        let Range { start, end: _ } = self.cursor();
+        
+        self.spans.push(start..start);
+        let result = f(self);
+
+        // pop span
+        let span = self.spans.pop().unwrap();
+        if let Some(last_span) = self.spans.last_mut() {
+            last_span.end = span.end;
+        }
+
+        Ok((result?, span))
+    }
+
     /// Checks whether the input for the parser is empty.
     pub fn is_empty(&self) -> bool {
         self.tokens[self.index..].is_empty()
@@ -222,9 +246,10 @@ impl<OFF, const N: u32> Parse for PCOffset<OFF, N>
     where Offset<OFF, N>: TokenParse
 {
     fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
+        let span = parser.cursor();
         match parser.match_()? {
             Some(Either::Left(off)) => Ok(PCOffset::Offset(off)),
-            Some(Either::Right(Label(s))) => Ok(PCOffset::Label(s)),
+            Some(Either::Right(Label(label))) => Ok(PCOffset::Label(SpannedLabel { label, span })),
             None => Err(ParseErr::new("expected offset or label", parser.cursor()))
         }
     }
@@ -605,9 +630,9 @@ impl Parse for Directive {
                 // so it cannot be parsed with PCOffset's parser and has to be handled differently.
                 let span = parser.cursor();
                 let operand = match parser.match_::<Either<Label, Either<Offset<u16, 16>, IOffset<16>>>>()? {
-                    Some(Left(Label(s)))    => Ok(PCOffset::Label(s)),
-                    Some(Right(Left(off)))  => Ok(PCOffset::Offset(off)),
-                    Some(Right(Right(off))) => Ok(PCOffset::Offset(Offset::new_trunc(off.get() as u16))),
+                    Some(Left(Label(label))) => Ok(PCOffset::Label(SpannedLabel { label, span })),
+                    Some(Right(Left(off)))   => Ok(PCOffset::Offset(off)),
+                    Some(Right(Right(off)))  => Ok(PCOffset::Offset(Offset::new_trunc(off.get() as u16))),
                     _ => Err(ParseErr::new("expected numeric or label", span))
                 }?;
 
@@ -660,24 +685,26 @@ impl Parse for Stmt {
                 Some(Either::Left(Label(label))) => {
                     parser.match_::<Colon>()?; // skip colon if it exists
 
-                    last_label_span.replace(span);
-                    labels.push(label);
+                    last_label_span.replace(span.clone());
+                    labels.push(SpannedLabel { label, span });
                 }
                 Some(Either::Right(End)) => {},
                 _ => break
             }
         }
         
-        let nucleus = match parser.peek() {
-            Some((Token::Directive(_), _)) => Ok(StmtKind::Directive(parser.parse()?)),
-            Some((Token::Ident(id), _)) if !matches!(id, Ident::Label(_)) => Ok(StmtKind::Instr(parser.parse()?)),
-            _ => {
-                // Parser didn't find a directive or instruction following a label.
-                // Chances are the label was just a misspelled instruction.
-                Err(ParseErr::new("expected instruction or directive", last_label_span.unwrap_or(parser.cursor())))
+        let (nucleus, span) = parser.spanned(|parser| {
+                match parser.peek() {
+                Some((Token::Directive(_), _)) => Ok(StmtKind::Directive(parser.parse()?)),
+                Some((Token::Ident(id), _)) if !matches!(id, Ident::Label(_)) => Ok(StmtKind::Instr(parser.parse()?)),
+                _ => {
+                    // Parser didn't find a directive or instruction following a label.
+                    // Chances are the label was just a misspelled instruction.
+                    Err(ParseErr::new("expected instruction or directive", last_label_span.unwrap_or(parser.cursor())))
+                }
             }
-        }?;
+        })?;
 
-        Ok(Self { labels, nucleus })
+        Ok(Self { labels, nucleus, span })
     }
 }

@@ -12,10 +12,14 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
+use std::ops::Range;
+
+use logos::Span;
 
 use crate::ast::asm::{AsmInstr, Directive, Stmt, StmtKind};
 use crate::ast::sim::SimInstr;
 use crate::ast::{IOffset, ImmOrReg, Offset, OffsetNewErr, PCOffset, Reg};
+use crate::err::Spanned;
 use crate::sim::mem::Word;
 
 
@@ -35,22 +39,27 @@ pub fn assemble(ast: Vec<Stmt>) -> Result<ObjectFile, AsmErr> {
                 debug_assert!(current.is_none());
                 
                 let addr = off.get();
-                current.replace((addr + 1, ObjBlock { start: addr, words: vec![] }));
+                current.replace((addr + 1, ObjBlock { start: addr, start_span: stmt.span, words: vec![] }));
             },
             StmtKind::Directive(Directive::End) => {
                 // The current block is complete, so take it out and push it into the object file.
-                let Some((_, ObjBlock { start, words })) = current.take() else {
-                    return Err(AsmErr::UnopenedOrig); // unreachable (because pass 1 should've found it)
+                let Some((_, ObjBlock { start, start_span, words })) = current.take() else {
+                    // unreachable (because pass 1 should've found it)
+                    return Err(AsmErr::new(AsmErrKind::UnopenedOrig, stmt.span));
                 };
-                obj.push(start, words)?;
+                obj.push(start, start_span, words)?;
             },
             StmtKind::Directive(directive) => {
-                let Some((lc, block)) = &mut current else { return Err(AsmErr::UndetAddrStmt) };
+                let Some((lc, block)) = &mut current else {
+                    return Err(AsmErr::new(AsmErrKind::UndetAddrStmt, stmt.span));
+                };
                 let n = directive.write_directive(&sym, block)?;
                 *lc = lc.wrapping_add(n);
             },
             StmtKind::Instr(instr) => {
-                let Some((lc, block)) = &mut current else { return Err(AsmErr::UndetAddrStmt) };
+                let Some((lc, block)) = &mut current else {
+                    return Err(AsmErr::new(AsmErrKind::UndetAddrStmt, stmt.span));
+                };
                 let sim = instr.into_sim_instr(*lc, &sym)?;
                 block.push(sim.encode());
                 *lc = lc.wrapping_add(1);
@@ -60,9 +69,11 @@ pub fn assemble(ast: Vec<Stmt>) -> Result<ObjectFile, AsmErr> {
 
     Ok(obj)
 }
-/// Error from assembling given assembly code.
-#[derive(Debug)]
-pub enum AsmErr {
+/// Kinds of errors that can occur from assembling given assembly code.
+/// 
+/// Error with span information is [`AsmErr`].
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub enum AsmErrKind {
     /// Cannot determine address of label (pass 1).
     UndetAddrLabel,
     /// Cannot determine address of instruction (pass 2).
@@ -84,43 +95,50 @@ pub enum AsmErr {
     /// Block is way too large (pass 2).
     ExcessiveBlock,
 }
-impl std::fmt::Display for AsmErr {
+impl std::fmt::Display for AsmErrKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AsmErr::UndetAddrLabel    => f.write_str("cannot determine address of label"),
-            AsmErr::UndetAddrStmt     => f.write_str("cannot determine address of statement"),
-            AsmErr::UnclosedOrig      => f.write_str(".orig directive was never closed"),
-            AsmErr::UnopenedOrig      => f.write_str(".end does not have associated .orig"),
-            AsmErr::OverlappingOrig   => f.write_str("cannot have an .orig inside another region"),
-            AsmErr::OverlappingLabels => f.write_str("label was defined multiple times"),
-            AsmErr::OverlappingBlocks => f.write_str("regions would overlap in memory"),
-            AsmErr::OffsetNewErr(e)   => e.fmt(f),
-            AsmErr::CouldNotFindLabel => f.write_str("label does not exist"),
-            AsmErr::ExcessiveBlock    => f.write_str("block is too large"),
+            Self::UndetAddrLabel    => f.write_str("cannot determine address of label"),
+            Self::UndetAddrStmt     => f.write_str("cannot determine address of statement"),
+            Self::UnclosedOrig      => f.write_str(".orig directive was never closed"),
+            Self::UnopenedOrig      => f.write_str(".end does not have associated .orig"),
+            Self::OverlappingOrig   => f.write_str("cannot have an .orig inside another region"),
+            Self::OverlappingLabels => f.write_str("label was defined multiple times"),
+            Self::OverlappingBlocks => f.write_str("regions overlap in memory"),
+            Self::OffsetNewErr(e)   => e.fmt(f),
+            Self::CouldNotFindLabel => f.write_str("label could not be found"),
+            Self::ExcessiveBlock    => f.write_str("block is too large"),
         }
     }
 }
+
+/// Error from assembling given assembly code.
+pub type AsmErr = Spanned<AsmErrKind>;
 impl std::error::Error for AsmErr {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::OffsetNewErr(e) => Some(e),
+        match &self.value {
+            AsmErrKind::OffsetNewErr(e) => Some(e),
             _ => None
         }
     }
 }
 impl crate::err::Error for AsmErr {
+    fn span(&self) -> Option<crate::err::ErrSpan> {
+        Some(self.span.clone())
+    }
+
     fn help(&self) -> Option<std::borrow::Cow<str>> {
-        match self {
-            AsmErr::UndetAddrLabel    => Some("try moving this label inside of a .orig/.end region".into()),
-            AsmErr::UndetAddrStmt     => Some("try moving this statement inside of a .orig/.end region".into()),
-            AsmErr::UnclosedOrig      => None,
-            AsmErr::UnopenedOrig      => None,
-            AsmErr::OverlappingOrig   => None,
-            AsmErr::OverlappingLabels => Some("labels must be unique within a file, try renaming one of the labels".into()),
-            AsmErr::OverlappingBlocks => None,
-            AsmErr::OffsetNewErr(e)   => e.help(),
-            AsmErr::CouldNotFindLabel => None,
-            AsmErr::ExcessiveBlock    => None,
+        match &self.value {
+            AsmErrKind::UndetAddrLabel    => Some("try moving this label inside of an .orig/.end block".into()),
+            AsmErrKind::UndetAddrStmt     => Some("try moving this statement inside of an .orig/.end block".into()),
+            AsmErrKind::UnclosedOrig      => Some("try adding an .end directive at the end of this block".into()),
+            AsmErrKind::UnopenedOrig      => Some("try adding an .orig directive at the beginning of this block".into()),
+            AsmErrKind::OverlappingOrig   => Some("try adding an .end directive at the end of the outer .orig block".into()),
+            AsmErrKind::OverlappingLabels => Some("labels must be unique within a file, try renaming one of the labels".into()),
+            AsmErrKind::OverlappingBlocks => Some("try moving the starting address of one of these regions".into()),
+            AsmErrKind::OffsetNewErr(e)   => e.help(),
+            AsmErrKind::CouldNotFindLabel => Some("try adding the label before an instruction or directive".into()),
+            AsmErrKind::ExcessiveBlock    => Some("try not doing that".into()),
         }
     }
 }
@@ -129,56 +147,65 @@ impl crate::err::Error for AsmErr {
 #[derive(Debug, PartialEq, Eq)]
 pub struct SymbolTable {
     /// A mapping from label to address.
-    labels: HashMap<String, u16>
+    labels: HashMap<String, (u16, Span)>
 }
 
 impl SymbolTable {
     /// Creates a new symbol table (performing the first assembler pass)
     /// by reading through the statements and computing label addresses.
     pub fn new(stmts: &[Stmt]) -> Result<Self, AsmErr> {
-        let mut lc: Option<u16> = None;
-        let mut labels = HashMap::new();
+        let mut lc: Option<(u16, Span)> = None;
+        let mut labels: HashMap<String, (u16, Span)> = HashMap::new();
 
         for stmt in stmts {
             // Add labels if they exist
             if !stmt.labels.is_empty() {
-                let Some(addr) = lc else { return Err(AsmErr::UndetAddrLabel) };
+                let Some((addr, _)) = lc else {
+                    let spans = stmt.labels.iter()
+                        .map(|label| label.span.clone())
+                        .collect::<Vec<_>>();
+                    
+                    return Err(AsmErr::new(AsmErrKind::UndetAddrLabel, spans));
+                };
 
                 for label in &stmt.labels {
-                    match labels.entry(label.to_uppercase()) {
-                        Entry::Occupied(_) => return Err(AsmErr::OverlappingLabels),
-                        Entry::Vacant(e) => e.insert(addr),
+                    match labels.entry(label.label.to_uppercase()) {
+                        Entry::Occupied(e) => {
+                            let (_, span1) = e.get();
+                            return Err(AsmErr::new(AsmErrKind::OverlappingLabels, vec![span1.clone(), label.span.clone()]))
+                        },
+                        Entry::Vacant(e) => e.insert((addr, label.span.clone())),
                     };
                 }
             }
 
             lc = match &stmt.nucleus {
-                StmtKind::Instr(_) => lc.map(|addr| addr.wrapping_add(1)),
+                StmtKind::Instr(_) => lc.map(|(addr, span)| (addr.wrapping_add(1), span)),
                 StmtKind::Directive(d) => match d {
                     Directive::Orig(addr) => match lc {
-                        Some(_) => return Err(AsmErr::OverlappingOrig),
-                        None => Some(addr.get())
+                        Some((_, span)) => return Err(AsmErr::new(AsmErrKind::OverlappingOrig, vec![span, stmt.span.clone()])),
+                        None => Some((addr.get(), stmt.span.clone()))
                     },
-                    Directive::Fill(_) => lc.map(|addr| addr.wrapping_add(1)),
-                    Directive::Blkw(n) => lc.map(|addr| addr.wrapping_add(n.get())),
-                    Directive::Stringz(s) => lc.map(|addr| addr.wrapping_add(s.len() as u16).wrapping_add(1)),
+                    Directive::Fill(_) => lc.map(|(addr, span)| (addr.wrapping_add(1), span)),
+                    Directive::Blkw(n) => lc.map(|(addr, span)| (addr.wrapping_add(n.get()), span)),
+                    Directive::Stringz(s) => lc.map(|(addr, span)| (addr.wrapping_add(s.len() as u16).wrapping_add(1), span)),
                     Directive::End => match lc {
                         Some(_) => None,
-                        None => return Err(AsmErr::UnopenedOrig)
+                        None => return Err(AsmErr::new(AsmErrKind::UnopenedOrig, stmt.span.clone()))
                     },
                 },
             };
         }
 
         match lc {
-            None    => Ok(SymbolTable { labels }),
-            Some(_) => Err(AsmErr::UnclosedOrig),
+            None                 => Ok(SymbolTable { labels }),
+            Some((_, orig_span)) => Err(AsmErr::new(AsmErrKind::UnclosedOrig, orig_span)),
         }
     }
 
     /// Gets the address of a given label (if it exists).
     pub fn get(&self, label: &str) -> Option<u16> {
-        self.labels.get(&label.to_uppercase()).copied()
+        self.labels.get(&label.to_uppercase()).map(|&(addr, _)| addr)
     }
 }
 
@@ -189,9 +216,9 @@ fn replace_pc_offset<const N: u32>(off: PCOffset<i16, N>, lc: u16, sym: &SymbolT
     match off {
         PCOffset::Offset(off) => Ok(off),
         PCOffset::Label(label) => {
-            let Some(loc) = sym.get(&label) else { return Err(AsmErr::CouldNotFindLabel) };
+            let Some(loc) = sym.get(&label.label) else { return Err(AsmErr::new(AsmErrKind::CouldNotFindLabel, label.span)) };
             IOffset::new(loc.wrapping_sub(lc) as i16)
-                .map_err(AsmErr::OffsetNewErr)
+                .map_err(|e| AsmErr::new(AsmErrKind::OffsetNewErr(e), label.span))
         },
     }
 }
@@ -239,7 +266,7 @@ impl Directive {
             Directive::Fill(pc_offset) => {
                 let off = match pc_offset {
                     PCOffset::Offset(o) => o.get(),
-                    PCOffset::Label(l)  => labels.get(&l).ok_or(AsmErr::CouldNotFindLabel)?,
+                    PCOffset::Label(l)  => labels.get(&l.label).ok_or_else(|| AsmErr::new(AsmErrKind::CouldNotFindLabel, l.span))?,
                 };
 
                 block.push(off);
@@ -263,6 +290,8 @@ impl Directive {
 struct ObjBlock {
     /// Starting address of the block.
     start: u16,
+    /// .orig span of the block
+    start_span: Range<usize>,
     /// The words in the block.
     words: Vec<Word>
 }
@@ -290,7 +319,7 @@ impl Extend<u16> for ObjBlock {
 #[derive(Debug)]
 pub struct ObjectFile {
     /// A mapping from address to the words written starting from that address.
-    block_map: BTreeMap<u16, Vec<Word>>
+    block_map: BTreeMap<u16, (Vec<Word>, Span)>
 }
 impl ObjectFile {
     /// Creates a new, empty [`ObjectFile`].
@@ -303,47 +332,39 @@ impl ObjectFile {
     /// Add a new block to the object file, writing the provided words (`words`) at the provided address (`start`).
     /// 
     /// This will error if this block overlaps with another block already present in the object file.
-    pub fn push(&mut self, start: u16, words: Vec<Word>) -> Result<(), AsmErr> {
+    pub fn push(&mut self, start: u16, start_span: Range<usize>, words: Vec<Word>) -> Result<(), AsmErr> {
         // Only add to object file if non-empty:
         if !words.is_empty() {
             // Check block size to make sure block doesn't wrap around itself
             if words.len() > (1 << u16::BITS) {
-                return Err(AsmErr::ExcessiveBlock);
+                return Err(AsmErr::new(AsmErrKind::ExcessiveBlock, start_span));
             }
 
             // Find previous block and ensure no overlap:
             let prev_block = self.block_map.range(..=start).next_back()
                 .or_else(|| self.block_map.last_key_value());
 
-            if let Some((&prev_start, prev_words)) = prev_block {
+            if let Some((&prev_start, (prev_words, prev_span))) = prev_block {
                 // check if this block overlaps with the previous block
                 if (start.wrapping_sub(prev_start) as usize) < prev_words.len() {
-                    return Err(AsmErr::OverlappingBlocks);
+                    return Err(AsmErr::new(AsmErrKind::OverlappingBlocks, vec![prev_span.clone(), start_span]));
                 }
             }
 
             // No overlap, so we can add it:
-            self.block_map.insert(start, words);
+            self.block_map.insert(start, (words, start_span));
         }
 
         Ok(())
     }
 
     /// Get an iterator over all of the blocks of the object file.
-    pub fn iter(&self) -> ObjFileIter<'_> {
+    pub fn iter(&self) -> impl Iterator<Item=(u16, &[Word])> {
         self.block_map.iter()
+            .map(|(&addr, (block, _))| (addr, block.as_slice()))
     }
 }
 
-type ObjFileIter<'o> = std::collections::btree_map::Iter<'o, u16, Vec<Word>>;
-impl<'o> IntoIterator for &'o ObjectFile {
-    type Item = <Self::IntoIter as Iterator>::Item;
-    type IntoIter = ObjFileIter<'o>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
 impl Default for ObjectFile {
     fn default() -> Self {
         Self::new()
