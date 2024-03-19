@@ -34,13 +34,22 @@ pub enum SimErr {
     ProgramHalted,
     /// A register was loaded with a partially uninitialized value.
     /// 
-    /// This will ignore loads from the stack (R6), because those *can* be uninitialized.
+    /// This will ignore loads from the stack (R6), because it is convention to push registers 
+    /// (including uninitialized registers).
+    /// This also ignores loads from allocated (`.blkw`) memory in case the program writer
+    /// uses those as register stores.
+
     // IDEA: So currently, the way this is implemented is that LDR Rx, R6, OFF is accepted regardless of initialization.
     // We could make this stricter by keeping track of how much is allocated on the stack.
     StrictRegSetUninit,
     /// Memory was loaded with a partially uninitialized value.
-    /// This will ignore stores from the stack (R6), because those *can* be uninitialized.
-    // IDEA: See above.
+    /// 
+    /// This will ignore loads from the stack (R6), because it is convention to push registers 
+    /// (including uninitialized registers).
+    /// This also ignores loads from allocated (`.blkw`) memory in case the program writer
+    /// uses those as register stores.
+
+    // IDEA: See StrictRegSetUninit.
     StrictMemSetUninit,
     /// Data was stored into MMIO with a partially uninitialized value.
     StrictIOSetUninit,
@@ -97,6 +106,13 @@ pub struct Simulator {
     /// It is also an Option so that closing it (via [`Simulator::close_io`]) 
     /// does not require closing the entire Simulator.
     pub io: Option<io::SimIO>,
+
+    /// Allocated blocks in object file.
+    /// 
+    /// Keeps track of allocated blocks in the current object file.
+    /// Loading and setting to an allocated block does not 
+    /// cause register/memory strictness errors.
+    alloca: Box<[(u16, u16)]>
 }
 
 impl Simulator {
@@ -110,7 +126,8 @@ impl Simulator {
             saved_sp: Word::new_init(0x2FFF),
             sr_entered: 0,
             strict: false,
-            io: None
+            io: None,
+            alloca: Box::new([])
         }
     }
 
@@ -137,9 +154,30 @@ impl Simulator {
     
     /// Loads an object file into this simulator.
     pub fn load_obj_file(&mut self, obj: &ObjectFile) {
+        use std::cmp::Ordering;
+
+        let mut alloca = Vec::with_capacity(obj.len());
+
         for (start, words) in obj.iter() {
             self.mem.copy_block(start, words);
+
+            // add this block to alloca
+            let len = words.len() as u16;
+            let end = start.wrapping_add(len);
+
+            match start.cmp(&end) {
+                Ordering::Less    => alloca.push((start, len)),
+                Ordering::Equal   => {},
+                Ordering::Greater => {
+                    // push (start..) and (0..end) as blocks
+                    alloca.push((start, start.wrapping_neg()));
+                    if end != 0 { alloca.push((0, end)) };
+                },
+            }
         }
+
+        alloca.sort_by_key(|&(start, _)| start);
+        self.alloca = alloca.into_boxed_slice();
     }
     /// Wipes the simulator's state.
     pub fn clear(&mut self) {
@@ -171,6 +209,21 @@ impl Simulator {
         self.set_pc(Word::from(self.pc.wrapping_add_signed(offset)))
     }
 
+    /// Checks whether address is in allocated user space
+    pub fn in_alloca(&self, addr: u16) -> bool {
+        let first_post = self.alloca.partition_point(|&(start, _)| start <= addr);
+        if first_post == 0 { return false };
+        
+        // This is the last block where start <= addr.
+        let (start, len) = self.alloca[first_post - 1];
+
+        // We must also check that addr < end.
+        // If start + len is None, that means end is greater than all possible lengths.
+        match start.checked_add(len) {
+            Some(e) => addr < e,
+            None    => true
+        }
+    }
     /// Computes the memory access context, 
     /// which are flags that control privilege and checks when accessing memory
     /// (see [`Mem::get`] and [`Mem::set`]).
@@ -255,16 +308,21 @@ impl Simulator {
             },
             SimInstr::LD(dr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
-                
+                let write_strict = self.strict && !self.in_alloca(ea);
+
                 let val = self.mem.get(ea, self.mem_ctx(&self.io))?;
-                self.reg_file[dr].copy_word(val, self.strict, SimErr::StrictRegSetUninit)?;
+                self.reg_file[dr].copy_word(val, write_strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(val.get());
             },
             SimInstr::ST(sr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
+                let write_ctx = MemAccessCtx {
+                    strict: self.strict && !self.in_alloca(ea),
+                    ..self.mem_ctx(&self.io)
+                };
 
                 let val = self.reg_file[sr];
-                self.mem.set(ea, val, self.mem_ctx(&self.io))?;
+                self.mem.set(ea, val, write_ctx)?;
             },
             SimInstr::JSR(op) => {
                 self.reg_file[R7].set(self.pc);
@@ -292,9 +350,10 @@ impl Simulator {
                     .assert_init(self.strict, SimErr::StrictMemAddrUninit)?
                     .get()
                     .wrapping_add_signed(off.get());
-
+                let write_strict = self.strict && br != R6 && !self.in_alloca(ea);
+                
                 let val = self.mem.get(ea, self.mem_ctx(&self.io))?;
-                self.reg_file[dr].copy_word(val, self.strict && br != R6, SimErr::StrictRegSetUninit)?;
+                self.reg_file[dr].copy_word(val, write_strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(val.get());
             },
             SimInstr::STR(sr, br, off) => {
@@ -302,10 +361,13 @@ impl Simulator {
                     .assert_init(self.strict, SimErr::StrictMemAddrUninit)?
                     .get()
                     .wrapping_add_signed(off.get());
+                let write_ctx = MemAccessCtx {
+                    strict: self.strict && br != R6 && !self.in_alloca(ea),
+                    ..self.mem_ctx(&self.io)
+                };
                 
                 let val = self.reg_file[sr];
-                let mctx = MemAccessCtx { strict: self.strict && br != R6, ..self.mem_ctx(&self.io) };
-                self.mem.set(ea, val, mctx)?;
+                self.mem.set(ea, val, write_ctx)?;
             },
             SimInstr::RTI => {
                 if self.psr.privileged() {
@@ -346,9 +408,10 @@ impl Simulator {
                 let ea = self.mem.get(shifted_pc, self.mem_ctx(&self.io))?
                     .assert_init(self.strict, SimErr::StrictMemAddrUninit)?
                     .get();
+                let write_strict = self.strict && !self.in_alloca(ea);
 
                 let val = self.mem.get(ea, self.mem_ctx(&self.io))?;
-                self.reg_file[dr].copy_word(val, self.strict, SimErr::StrictRegSetUninit)?;
+                self.reg_file[dr].copy_word(val, write_strict, SimErr::StrictRegSetUninit)?;
                 self.set_cc(val.get());
             },
             SimInstr::STI(sr, off) => {
@@ -356,9 +419,13 @@ impl Simulator {
                 let ea = self.mem.get(shifted_pc, self.mem_ctx(&self.io))?
                     .assert_init(self.strict, SimErr::StrictMemAddrUninit)?
                     .get();
+                let write_ctx = MemAccessCtx {
+                    strict: self.strict && !self.in_alloca(ea),
+                    ..self.mem_ctx(&self.io)
+                };
 
                 let val = self.reg_file[sr];
-                self.mem.set(ea, val, self.mem_ctx(&self.io))?;
+                self.mem.set(ea, val, write_ctx)?;
             },
             SimInstr::JMP(br) => {
                 // check for RET

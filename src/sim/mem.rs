@@ -285,6 +285,8 @@ pub struct MemAccessCtx<'ctx> {
     pub privileged: bool,
     /// Whether writes to memory should follow strict rules 
     /// (no writing partially or fully uninitialized data).
+    /// 
+    /// This does not affect [`Mem::get`].
     pub strict: bool,
     /// Reference to the IO device.
     pub io: Option<&'ctx super::io::SimIO>

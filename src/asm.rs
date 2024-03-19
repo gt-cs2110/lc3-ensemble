@@ -394,7 +394,11 @@ impl Extend<u16> for ObjBlock {
 /// This can be loaded in the simulator to run the assembled code.
 #[derive(Debug)]
 pub struct ObjectFile {
-    /// A mapping from address to the words written starting from that address.
+    /// A mapping of each block's address to its corresponding data and 
+    /// the span of the .orig statement that starts the block.
+    /// 
+    /// Note that the length of a block should fit in a `u16`, so the
+    /// block can be a maximum of 65535 words.
     block_map: BTreeMap<u16, (Vec<Word>, Span)>
 }
 impl ObjectFile {
@@ -433,6 +437,15 @@ impl ObjectFile {
     pub fn iter(&self) -> impl Iterator<Item=(u16, &[Word])> {
         self.block_map.iter()
             .map(|(&addr, (block, _))| (addr, block.as_slice()))
+    }
+
+    /// Counts the number of blocks in this object file.
+    pub fn len(&self) -> usize {
+        self.block_map.len()
+    }
+    /// Returns whether there are blocks in this object file.
+    pub fn is_empty(&self) -> bool {
+        self.block_map.is_empty()
     }
 }
 
