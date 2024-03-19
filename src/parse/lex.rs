@@ -174,7 +174,7 @@ impl crate::err::Error for LexErr {
             LexErr::InvalidDecEmpty  => Some("there should be digits (0-9) here".into()),
             LexErr::UnknownIntErr    => None,
             LexErr::UnclosedStrLit   => Some("add a quote to the end of the string literal".into()),
-            LexErr::StrLitTooBig     => Some(format!("string literals are limited to at most {} characters", u16::MAX).into()),
+            LexErr::StrLitTooBig     => Some(format!("string literals are limited to at most {} characters", u16::MAX - 1).into()),
             LexErr::InvalidReg       => Some("this must be R0-R7".into()),
             LexErr::InvalidSymbol    => Some("this char does not occur in any token in LC-3 assembly".into()),
         }
@@ -288,7 +288,7 @@ fn lex_str_literal(lx: &mut Lexer<'_, Token>) -> Result<String, LexErr> {
     }
     buf.push_str(remaining);
     
-    match buf.len() <= usize::from(u16::MAX) {
+    match buf.len() < usize::from(u16::MAX) {
         true  => Ok(buf),
         false => Err(LexErr::StrLitTooBig),
     }

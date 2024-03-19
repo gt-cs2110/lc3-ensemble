@@ -35,15 +35,15 @@ pub fn assemble(ast: Vec<Stmt>) -> Result<ObjectFile, AsmErr> {
     for stmt in ast {
         match stmt.nucleus {
             StmtKind::Directive(Directive::Orig(off)) => {
-                // Add new working block.
                 debug_assert!(current.is_none());
                 
+                // Add new working block.
                 let addr = off.get();
-                current.replace((addr + 1, ObjBlock { start: addr, start_span: stmt.span, words: vec![] }));
+                current.replace((addr + 1, ObjBlock { start: addr, orig_span: stmt.span, words: vec![] }));
             },
             StmtKind::Directive(Directive::End) => {
                 // The current block is complete, so take it out and push it into the object file.
-                let Some((_, ObjBlock { start, start_span, words })) = current.take() else {
+                let Some((_, ObjBlock { start, orig_span: start_span, words })) = current.take() else {
                     // unreachable (because pass 1 should've found it)
                     return Err(AsmErr::new(AsmErrKind::UnopenedOrig, stmt.span));
                 };
@@ -53,8 +53,10 @@ pub fn assemble(ast: Vec<Stmt>) -> Result<ObjectFile, AsmErr> {
                 let Some((lc, block)) = &mut current else {
                     return Err(AsmErr::new(AsmErrKind::UndetAddrStmt, stmt.span));
                 };
-                let n = directive.write_directive(&sym, block)?;
-                *lc = lc.wrapping_add(n);
+
+                let wl = directive.word_len();
+                directive.write_directive(&sym, block)?;
+                *lc = lc.wrapping_add(wl);
             },
             StmtKind::Instr(instr) => {
                 let Some((lc, block)) = &mut current else {
@@ -107,7 +109,7 @@ impl std::fmt::Display for AsmErrKind {
             Self::OverlappingBlocks => f.write_str("regions overlap in memory"),
             Self::OffsetNewErr(e)   => e.fmt(f),
             Self::CouldNotFindLabel => f.write_str("label could not be found"),
-            Self::ExcessiveBlock    => f.write_str("block is too large"),
+            Self::ExcessiveBlock    => write!(f, "block is larger than {} words", (1 << 16)),
         }
     }
 }
@@ -159,11 +161,12 @@ impl crate::err::Error for AsmErr {
         }
     }
 }
+
 /// The symbol table created in the first assembler pass
 /// that maps each label to its corresponding address.
 #[derive(Debug, PartialEq, Eq)]
 pub struct SymbolTable {
-    /// A mapping from label to address.
+    /// A mapping from label to address and span of the label.
     labels: HashMap<String, (u16, Span)>
 }
 
@@ -171,13 +174,35 @@ impl SymbolTable {
     /// Creates a new symbol table (performing the first assembler pass)
     /// by reading through the statements and computing label addresses.
     pub fn new(stmts: &[Stmt]) -> Result<Self, AsmErr> {
-        let mut lc: Option<(u16, Span)> = None;
+        struct Cursor {
+            // The current location counter.
+            lc: u16,
+            // The length of the current block being read.
+            block_len: u16,
+            // The span of the .orig directive.
+            block_orig: Span,
+        }
+        impl Cursor {
+            /// Attempts to shift the LC forward by n word locations,
+            /// failing if that would overflow the size of the block.
+            /// 
+            /// This returns if it was successful.
+            fn shift(&mut self, n: u16) -> bool {
+                let Some(new_len) = self.block_len.checked_add(n) else { return false };
+
+                self.lc = self.lc.wrapping_add(n);
+                self.block_len = new_len;
+                true
+            }
+        }
+
+        let mut lc: Option<Cursor> = None;
         let mut labels: HashMap<String, (u16, Span)> = HashMap::new();
 
         for stmt in stmts {
             // Add labels if they exist
             if !stmt.labels.is_empty() {
-                let Some((addr, _)) = lc else {
+                let Some(cur) = lc.as_ref() else {
                     let spans = stmt.labels.iter()
                         .map(|label| label.span())
                         .collect::<Vec<_>>();
@@ -191,32 +216,38 @@ impl SymbolTable {
                             let (_, span1) = e.get();
                             return Err(AsmErr::new(AsmErrKind::OverlappingLabels, [span1.clone(), label.span()]))
                         },
-                        Entry::Vacant(e) => e.insert((addr, label.span())),
+                        Entry::Vacant(e) => e.insert((cur.lc, label.span())),
                     };
                 }
             }
 
-            lc = match &stmt.nucleus {
-                StmtKind::Instr(_) => lc.map(|(addr, span)| (addr.wrapping_add(1), span)),
-                StmtKind::Directive(d) => match d {
-                    Directive::Orig(addr) => match lc {
-                        Some((_, span)) => return Err(AsmErr::new(AsmErrKind::OverlappingOrig, [span, stmt.span.clone()])),
-                        None => Some((addr.get(), stmt.span.clone()))
-                    },
-                    Directive::Fill(_) => lc.map(|(addr, span)| (addr.wrapping_add(1), span)),
-                    Directive::Blkw(n) => lc.map(|(addr, span)| (addr.wrapping_add(n.get()), span)),
-                    Directive::Stringz(s) => lc.map(|(addr, span)| (addr.wrapping_add(s.len() as u16).wrapping_add(1), span)),
-                    Directive::End => match lc {
-                        Some(_) => None,
-                        None => return Err(AsmErr::new(AsmErrKind::UnopenedOrig, stmt.span.clone()))
-                    },
+            // Handle .orig, .end cases:
+            match &stmt.nucleus {
+                StmtKind::Directive(Directive::Orig(addr)) => match lc {
+                    Some(cur) => return Err(AsmErr::new(AsmErrKind::OverlappingOrig, [cur.block_orig, stmt.span.clone()])),
+                    None      => { lc.replace(Cursor { lc: addr.get(), block_len: 0, block_orig: stmt.span.clone() }); },
                 },
+                StmtKind::Directive(Directive::End) => match lc {
+                    Some(_) => { lc.take(); },
+                    None    => return Err(AsmErr::new(AsmErrKind::UnopenedOrig, stmt.span.clone())),
+                },
+                _ => {}
             };
+
+            // Shift the location counter:
+            if let Some(cur) = &mut lc {
+                let success = match &stmt.nucleus {
+                    StmtKind::Instr(_)     => cur.shift(1),
+                    StmtKind::Directive(d) => cur.shift(d.word_len()),
+                };
+
+                if !success { return Err(AsmErr::new(AsmErrKind::ExcessiveBlock, cur.block_orig.clone())) }
+            }
         }
 
         match lc {
-            None                 => Ok(SymbolTable { labels }),
-            Some((_, orig_span)) => Err(AsmErr::new(AsmErrKind::UnclosedOrig, orig_span)),
+            None      => Ok(SymbolTable { labels }),
+            Some(cur) => Err(AsmErr::new(AsmErrKind::UnclosedOrig, cur.block_orig)),
         }
     }
 
@@ -274,12 +305,23 @@ impl AsmInstr {
     }
 }
 impl Directive {
+    /// How many words this directive takes up in memory.
+    fn word_len(&self) -> u16 {
+        match self {
+            Directive::Orig(_)    => 0,
+            Directive::Fill(_)    => 1,
+            Directive::Blkw(n)    => n.get(),
+            Directive::Stringz(s) => s.len() as u16 + 1, // lex should assure that s + 1 <= 65535
+            Directive::End        => 0,
+        }
+    }
+
     /// Writes the assembly for the given directive into the provided object block.
     /// 
     /// This also returns the total number of memory locations written.
-    fn write_directive(self, labels: &SymbolTable, block: &mut ObjBlock) -> Result<u16, AsmErr> {
+    fn write_directive(self, labels: &SymbolTable, block: &mut ObjBlock) -> Result<(), AsmErr> {
         match self {
-            Directive::Orig(_) => Ok(0),
+            Directive::Orig(_) => {},
             Directive::Fill(pc_offset) => {
                 let off = match pc_offset {
                     PCOffset::Offset(o) => o.get(),
@@ -290,19 +332,16 @@ impl Directive {
                 };
 
                 block.push(off);
-                Ok(1)
             },
-            Directive::Blkw(n) => {
-                block.shift(n.get());
-                Ok(n.get())
-            },
+            Directive::Blkw(n) => block.shift(n.get()),
             Directive::Stringz(n) => {
                 block.extend(n.bytes().map(u16::from));
                 block.push(0);
-                Ok((n.len() as u16).wrapping_add(1))
             },
-            Directive::End => Ok(0),
+            Directive::End => {},
         }
+
+        Ok(())
     }
 }
 
@@ -310,8 +349,8 @@ impl Directive {
 struct ObjBlock {
     /// Starting address of the block.
     start: u16,
-    /// .orig span of the block
-    start_span: Range<usize>,
+    /// Span of the orig statement.
+    orig_span: Range<usize>,
     /// The words in the block.
     words: Vec<Word>
 }
@@ -355,11 +394,6 @@ impl ObjectFile {
     pub fn push(&mut self, start: u16, start_span: Range<usize>, words: Vec<Word>) -> Result<(), AsmErr> {
         // Only add to object file if non-empty:
         if !words.is_empty() {
-            // Check block size to make sure block doesn't wrap around itself
-            if words.len() > (1 << u16::BITS) {
-                return Err(AsmErr::new(AsmErrKind::ExcessiveBlock, start_span));
-            }
-
             // Find previous block and ensure no overlap:
             let prev_block = self.block_map.range(..=start).next_back()
                 .or_else(|| self.block_map.last_key_value());
