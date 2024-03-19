@@ -135,7 +135,7 @@ impl AsmInstr {
             AsmInstr::STI(sr, off)      => Ok(SimInstr::STI(sr, replace_pc_offset(off, lc, sym)?)),
             AsmInstr::STR(sr, br, off)  => Ok(SimInstr::STR(sr, br, off)),
             AsmInstr::TRAP(vect)        => Ok(SimInstr::TRAP(vect)),
-            AsmInstr::NOP(off)          => Ok(SimInstr::BR(0b111, replace_pc_offset(off, lc, sym)?)),
+            AsmInstr::NOP(off)          => Ok(SimInstr::BR(0b000, replace_pc_offset(off, lc, sym)?)),
             AsmInstr::GETC              => Ok(SimInstr::TRAP(Offset::new_trunc(0x20))),
             AsmInstr::OUT               => Ok(SimInstr::TRAP(Offset::new_trunc(0x21))),
             AsmInstr::PUTC              => Ok(SimInstr::TRAP(Offset::new_trunc(0x21))),
@@ -147,9 +147,12 @@ impl AsmInstr {
     }
 }
 impl Directive {
-    fn write_directive(self, labels: &SymbolTable, block: &mut ObjBlock) -> Result<(), AsmErr> {
+    /// Writes the assembly for the given directive into the provided object block.
+    /// 
+    /// This also returns the total number of memory locations written.
+    fn write_directive(self, labels: &SymbolTable, block: &mut ObjBlock) -> Result<u16, AsmErr> {
         match self {
-            Directive::Orig(_) => {},
+            Directive::Orig(_) => Ok(0),
             Directive::Fill(pc_offset) => {
                 let off = match pc_offset {
                     PCOffset::Offset(o) => o.get(),
@@ -157,18 +160,19 @@ impl Directive {
                 };
 
                 block.push(off);
+                Ok(1)
             },
             Directive::Blkw(n) => {
                 block.shift(n.get());
+                Ok(n.get())
             },
             Directive::Stringz(n) => {
                 block.extend(n.bytes().map(u16::from));
                 block.push(0);
+                Ok((n.len() as u16).wrapping_add(1))
             },
-            Directive::End => {},
-        };
-
-        Ok(())
+            Directive::End => Ok(0),
+        }
     }
 }
 
@@ -178,7 +182,7 @@ pub struct Assembler {
     /// The statements to convert.
     stmts: Vec<Stmt>,
     /// The symbol table of the statements (computed on initialization)
-    sym: SymbolTable,
+    pub sym: SymbolTable,
     /// The object file produced as a result
     obj: ObjectFile
 }
@@ -195,16 +199,12 @@ impl Assembler {
         let mut current: Option<(u16, ObjBlock)> = None;
 
         for stmt in std::mem::take(&mut self.stmts) {
-            if let Some((lc, _)) = current.as_mut() {
-                *lc = lc.wrapping_add(1);
-            }
-
             match stmt.nucleus {
                 StmtKind::Directive(Directive::Orig(off)) => {
                     // Add new working block.
                     debug_assert!(current.is_none());
                     let addr = off.get();
-                    current.replace((addr, ObjBlock { start: addr, words: vec![] }));
+                    current.replace((addr + 1, ObjBlock { start: addr, words: vec![] }));
                 },
                 StmtKind::Directive(Directive::End) => {
                     // Take out the current working block and put it into completed blocks.
@@ -214,13 +214,15 @@ impl Assembler {
                     self.obj.push(start, words)?;
                 },
                 StmtKind::Directive(directive) => {
-                    let Some((_, block)) = &mut current else { return Err(AsmErr::CannotDetAddress) };
-                    directive.write_directive(&self.sym, block)?;
+                    let Some((lc, block)) = &mut current else { return Err(AsmErr::CannotDetAddress) };
+                    let n = directive.write_directive(&self.sym, block)?;
+                    *lc = lc.wrapping_add(n);
                 },
                 StmtKind::Instr(instr) => {
                     let Some((lc, block)) = &mut current else { return Err(AsmErr::CannotDetAddress) };
                     let sim = instr.into_sim_instr(*lc, &self.sym)?;
                     block.push(sim.encode());
+                    *lc = lc.wrapping_add(1);
                 },
             }
         }

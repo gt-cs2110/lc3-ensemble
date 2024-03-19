@@ -14,7 +14,7 @@ use crate::asm::ObjectFile;
 use crate::ast::reg_consts::{R6, R7};
 use crate::ast::sim::SimInstr;
 use crate::ast::ImmOrReg;
-pub use io::SimIO;
+pub use io::*;
 
 use self::mem::{AssertInit as _, Mem, MemAccessCtx, RegFile, Word};
 
@@ -61,7 +61,7 @@ pub struct Simulator {
     pub pc: u16,
 
     /// The processor status register. See [`PSR`] for more details.
-    pub psr: PSR,
+    psr: PSR,
 
     /// Saved stack pointer (the one currently not in use)
     saved_sp: Word,
@@ -83,8 +83,12 @@ pub struct Simulator {
     /// such as verifying initialization state is normal for provided data.
     pub strict: bool,
 
-    /// IO handler for the simulator
-    pub io: io::SimIO,
+    /// IO handler for the simulator.
+    /// 
+    /// This is an Option because it is only enabled when the OS is active.
+    /// It is also an Option so that closing it (via [`Simulator::close_io`]) 
+    /// does not require closing the entire Simulator.
+    io: Option<io::SimIO>,
 }
 
 impl Simulator {
@@ -98,10 +102,34 @@ impl Simulator {
             saved_sp: Word::new_init(0x2FFF),
             sr_entered: 0,
             strict: false,
-            io: io::SimIO::new()
+            io: None
         }
     }
 
+    /// Loads and initializes the operating system (traps) and IO.
+    /// 
+    /// Even without the OS, the HALT trap can be used.
+    pub fn load_os(&mut self) {
+        use crate::parse::parse_ast;
+        use crate::asm::Assembler;
+
+        self.io.replace(io::SimIO::new());
+
+        let os_file = include_str!("os.asm");
+        let ast = parse_ast(os_file).unwrap();
+        
+        let mut asm = Assembler::new(ast).unwrap();
+        asm.prepare_obj_file().unwrap();
+        let obj = asm.unwrap();
+
+        self.load_obj_file(&obj);
+    }
+    /// Closes the IO handler and awaits for the display to finish.
+    pub fn close_io(&mut self) -> std::thread::Result<()> {
+        let Some(io) = self.io.take() else { return Ok(()) } ;
+        io.join()
+    }
+    
     /// Loads an object file into this simulator.
     pub fn load_obj_file(&mut self, obj: &ObjectFile) {
         for (&start, words) in obj.iter() {
@@ -122,16 +150,28 @@ impl Simulator {
         }
     }
 
+    /// Gets a reference to the PSR.
+    pub fn psr(&self) -> &PSR {
+        &self.psr
+    }
+
     /// Sets the PC to the given address, raising any errors that occur.
     pub fn set_pc(&mut self, addr_word: Word) -> Result<(), SimErr> {
         let addr = addr_word.get();
-        let data = self.mem.get(addr, self.mem_ctx(&self.io))?;
-
+        
         if self.strict {
             // Check PC address is initialized:
             if !addr_word.is_init() { return Err(SimErr::StrictJmpAddrUninit) };
+            
             // Check data at PC is initialized:
-            if !data.is_init() { return Err(SimErr::StrictPCMemUninit) };
+            
+            // FIXME:
+            // This unconditionally assumes that the PC's data will always be read, however
+            // PC* before execute may not always be read, so this check is incorrect.
+            // Could be checked for JMP/JSR though?
+
+            // let data = self.mem.get(addr, self.mem_ctx(&self.io))?;
+            // if !data.is_init() { return Err(SimErr::StrictPCMemUninit) };
         }
 
         self.pc = addr;
@@ -150,8 +190,8 @@ impl Simulator {
     /// reference.
     /// If you want to use this, try `self.mem_ctx(&self.io)` (or create a macro that does
     /// what this internally does).
-    pub fn mem_ctx<'ctx>(&self, io: &'ctx io::SimIO) -> MemAccessCtx<'ctx> {
-        MemAccessCtx { privileged: self.psr.privileged(), strict: self.strict, io }
+    pub fn mem_ctx<'ctx>(&self, io: &'ctx Option<io::SimIO>) -> MemAccessCtx<'ctx> {
+        MemAccessCtx { privileged: self.psr.privileged(), strict: self.strict, io: io.as_ref() }
     }
 
     /// Interrupt, trap, and exception handler.
@@ -202,6 +242,7 @@ impl Simulator {
     pub fn step_in(&mut self) -> Result<(), SimErr> {
         let word = self.mem.get(self.pc, self.mem_ctx(&self.io))?.get();
         let instr = SimInstr::decode(word)?;
+        
         self.offset_pc(1)?;
 
         match instr {

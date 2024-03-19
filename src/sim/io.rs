@@ -94,11 +94,43 @@ impl SimIO {
         }
     }
 
-    /// Reads the data at the given memory-mapped address (which is controlled by SimIO).
+    /// Closes the keyboard and display channels and waits for the display to complete.
+    pub fn join(self) -> std::thread::Result<()> {
+        let Self { kb_status: _, kb_data, kb_handler: _, display_status: _, display_data, display_handler } = self;
+
+        std::mem::drop(kb_data);
+        std::mem::drop(display_data);
+
+        display_handler.join()
+    }
+}
+
+impl std::fmt::Debug for SimIO {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SimIO").finish_non_exhaustive()
+    }
+}
+impl Default for SimIO {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// An IO device that can be read/written to.
+pub trait IODevice {
+    /// Reads the data at the given memory-mapped address.
     /// 
     /// If successful, this returns the value returned from that address.
     /// If unsuccessful, this returns `None`.
-    pub fn io_read(&self, addr: u16) -> Option<u16> {
+    fn io_read(&self, addr: u16) -> Option<u16>;
+
+    /// Writes the data to the given memory-mapped address.
+    /// 
+    /// This returns whether the write was successful or not.
+    fn io_write(&self, addr: u16, data: u16) -> bool;
+}
+impl IODevice for SimIO {
+    fn io_read(&self, addr: u16) -> Option<u16> {
         match addr {
             KBSR => match self.kb_status.load(Ordering::Relaxed) {
                 true  => Some(0x8000),
@@ -120,34 +152,31 @@ impl SimIO {
         }
     }
 
-    /// Writes the data to the given memory-mapped address (which is controlled by SimIO).
-    /// 
-    /// This returns whether the write was successful or not.
-    pub fn io_write(&self, addr: u16, data: u16) -> bool {
+    fn io_write(&self, addr: u16, data: u16) -> bool {
         match addr {
             DDR => self.display_data.send(data as u8).is_ok(),
             _ => false
         }
     }
+}
+impl<D: IODevice> IODevice for &D {
+    fn io_read(&self, addr: u16) -> Option<u16> {
+        (*self).io_read(addr)
+    }
 
-    /// Closes the keyboard and display channels and waits for the display to complete.
-    pub fn join(self) -> std::thread::Result<()> {
-        let Self { kb_status: _, kb_data, kb_handler: _, display_status: _, display_data, display_handler } = self;
-
-        std::mem::drop(kb_data);
-        std::mem::drop(display_data);
-
-        display_handler.join()
+    fn io_write(&self, addr: u16, data: u16) -> bool {
+        (*self).io_write(addr, data)
     }
 }
-
-impl std::fmt::Debug for SimIO {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SimIO").finish_non_exhaustive()
+impl<D: IODevice> IODevice for Option<D> {
+    fn io_read(&self, addr: u16) -> Option<u16> {
+        self.as_ref()?.io_read(addr)
     }
-}
-impl Default for SimIO {
-    fn default() -> Self {
-        Self::new()
+
+    fn io_write(&self, addr: u16, data: u16) -> bool {
+        match self {
+            Some(d) => d.io_write(addr, data),
+            None => false,
+        }
     }
 }

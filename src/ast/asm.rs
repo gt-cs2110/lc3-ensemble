@@ -437,7 +437,14 @@ pub enum StmtKind {
     #[allow(missing_docs)]
     Directive(Directive)
 }
-
+impl std::fmt::Display for StmtKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StmtKind::Instr(i) => i.fmt(f),
+            StmtKind::Directive(d) => d.fmt(f),
+        }
+    }
+}
 /// A "statement" in LC-3 assembly.
 /// 
 /// While not a defined term in LC-3 assembly, 
@@ -450,7 +457,15 @@ pub struct Stmt {
     /// The instruction or directive.
     pub nucleus: StmtKind
 }
-
+impl std::fmt::Display for Stmt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for label in &self.labels {
+            label.fmt(f)?;
+            f.write_char(' ')?;
+        }
+        self.nucleus.fmt(f)
+    }
+}
 /**
  * Attempts to disassemble bytecode back into assembly instructions.
  */

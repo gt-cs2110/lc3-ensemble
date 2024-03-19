@@ -7,6 +7,7 @@
 
 use crate::ast::Reg;
 
+use super::io::IODevice as _;
 use super::SimErr;
 
 /// A memory location that can be read and written to.
@@ -279,7 +280,7 @@ pub struct MemAccessCtx<'ctx> {
     /// (no writing partially or fully uninitialized data).
     pub strict: bool,
     /// Reference to the IO device.
-    pub io: &'ctx super::io::SimIO
+    pub io: Option<&'ctx super::io::SimIO>
 }
 
 const N: usize = 2usize.pow(16);
@@ -337,7 +338,12 @@ impl Mem {
     pub fn set(&mut self, addr: u16, data: Word, ctx: MemAccessCtx) -> Result<(), SimErr> {
         if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
         
-        data.assert_init(ctx.strict, SimErr::StrictMemSetUninit)?;
+        // FIXME:
+        // Setting memory to something uninitialized is not wrong behavior.
+        // If a register started off uninitialized, storing it (such as what you'd do for stack push),
+        // shouldn't be considered incorrect.
+
+        // data.assert_init(ctx.strict, SimErr::StrictMemSetUninit)?;
 
         let write_to_mem = if addr >= IO_START {
             ctx.io.io_write(addr, data.get())
