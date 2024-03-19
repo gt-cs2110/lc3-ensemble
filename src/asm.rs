@@ -4,7 +4,7 @@
 //! that can be executed by the simulator.
 //! 
 //! The assembler module notably consists of:
-//! - [`Assembler`]: a struct which performs assembler passes on a source AST and produces an object file
+//! - [`assemble`]: The main function which assembles the statements into an object file.
 //! - [`SymbolTable`]: a struct holding the symbol table, which stores location information for labels after the first assembler pass
 //! - [`ObjectFile`]: a struct holding the object file, which can be loaded into the simulator and executed
 //! 
@@ -19,6 +19,47 @@ use crate::ast::{IOffset, ImmOrReg, Offset, OffsetNewErr, PCOffset, Reg};
 use crate::sim::mem::Word;
 
 
+/// Assembles a assembly source code AST into an object file.
+pub fn assemble(ast: Vec<Stmt>) -> Result<ObjectFile, AsmErr> {
+    let sym = SymbolTable::new(&ast)?;
+    let mut obj = ObjectFile::new();
+
+    // PASS 2
+    // Holding both the LC and currently writing block
+    let mut current: Option<(u16, ObjBlock)> = None;
+
+    for stmt in ast {
+        match stmt.nucleus {
+            StmtKind::Directive(Directive::Orig(off)) => {
+                // Add new working block.
+                debug_assert!(current.is_none());
+                
+                let addr = off.get();
+                current.replace((addr + 1, ObjBlock { start: addr, words: vec![] }));
+            },
+            StmtKind::Directive(Directive::End) => {
+                // The current block is complete, so take it out and push it into the object file.
+                let Some((_, ObjBlock { start, words })) = current.take() else {
+                    return Err(AsmErr::UnopenedOrig); // unreachable (because pass 1 should've found it)
+                };
+                obj.push(start, words)?;
+            },
+            StmtKind::Directive(directive) => {
+                let Some((lc, block)) = &mut current else { return Err(AsmErr::CannotDetAddress) };
+                let n = directive.write_directive(&sym, block)?;
+                *lc = lc.wrapping_add(n);
+            },
+            StmtKind::Instr(instr) => {
+                let Some((lc, block)) = &mut current else { return Err(AsmErr::CannotDetAddress) };
+                let sim = instr.into_sim_instr(*lc, &sym)?;
+                block.push(sim.encode());
+                *lc = lc.wrapping_add(1);
+            },
+        }
+    }
+
+    Ok(obj)
+}
 /// Error from assembling given assembly code.
 #[derive(Debug)]
 pub enum AsmErr {
@@ -173,66 +214,6 @@ impl Directive {
             },
             Directive::End => Ok(0),
         }
-    }
-}
-
-/// The assembler! Converts assembly statements into bytecode.
-#[derive(Debug)]
-pub struct Assembler {
-    /// The statements to convert.
-    stmts: Vec<Stmt>,
-    /// The symbol table of the statements (computed on initialization)
-    pub sym: SymbolTable,
-    /// The object file produced as a result
-    obj: ObjectFile
-}
-impl Assembler {
-    /// Creates a new assembler (and runs the first pass).
-    pub fn new(stmts: Vec<Stmt>) -> Result<Self, AsmErr> {
-        let sym = SymbolTable::new(&stmts)?;
-        Ok(Self { stmts, sym, obj: ObjectFile::new() })
-    }
-
-    /// Creates the object file (and returns any errors that result from it).
-    pub fn prepare_obj_file(&mut self) -> Result<(), AsmErr> {
-        // Holding both the LC and currently writing block
-        let mut current: Option<(u16, ObjBlock)> = None;
-
-        for stmt in std::mem::take(&mut self.stmts) {
-            match stmt.nucleus {
-                StmtKind::Directive(Directive::Orig(off)) => {
-                    // Add new working block.
-                    debug_assert!(current.is_none());
-                    let addr = off.get();
-                    current.replace((addr + 1, ObjBlock { start: addr, words: vec![] }));
-                },
-                StmtKind::Directive(Directive::End) => {
-                    // Take out the current working block and put it into completed blocks.
-                    let Some((_, ObjBlock { start, words })) = current.take() else {
-                        return Err(AsmErr::UnopenedOrig); // unreachable (because pass 1 should've found it)
-                    };
-                    self.obj.push(start, words)?;
-                },
-                StmtKind::Directive(directive) => {
-                    let Some((lc, block)) = &mut current else { return Err(AsmErr::CannotDetAddress) };
-                    let n = directive.write_directive(&self.sym, block)?;
-                    *lc = lc.wrapping_add(n);
-                },
-                StmtKind::Instr(instr) => {
-                    let Some((lc, block)) = &mut current else { return Err(AsmErr::CannotDetAddress) };
-                    let sim = instr.into_sim_instr(*lc, &self.sym)?;
-                    block.push(sim.encode());
-                    *lc = lc.wrapping_add(1);
-                },
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Gets the produced object file.
-    pub fn unwrap(self) -> ObjectFile {
-        self.obj
     }
 }
 

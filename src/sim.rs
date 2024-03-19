@@ -111,16 +111,13 @@ impl Simulator {
     /// Even without the OS, the HALT trap can be used.
     pub fn load_os(&mut self) {
         use crate::parse::parse_ast;
-        use crate::asm::Assembler;
+        use crate::asm::assemble;
 
         self.io.replace(io::SimIO::new());
 
         let os_file = include_str!("os.asm");
         let ast = parse_ast(os_file).unwrap();
-        
-        let mut asm = Assembler::new(ast).unwrap();
-        asm.prepare_obj_file().unwrap();
-        let obj = asm.unwrap();
+        let obj = assemble(ast).unwrap();
 
         self.load_obj_file(&obj);
     }
