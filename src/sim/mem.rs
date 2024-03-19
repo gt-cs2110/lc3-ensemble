@@ -354,7 +354,7 @@ impl Mem {
         };
         if write_to_mem {
             self.0[usize::from(addr)]
-                .copy_word(data, false, SimErr::ProgramHalted /* unreachable */)?;
+                .copy_word(data, ctx.strict, SimErr::StrictMemSetUninit)?;
         }
         Ok(())
     }
@@ -368,7 +368,7 @@ impl Default for Mem {
 /// The register file. 
 /// 
 /// This can be addressed with a [`Reg`], using typical array index notation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RegFile([Word; 8]);
 impl RegFile {
     /// Creates a register file with uninitialized data.

@@ -33,7 +33,15 @@ pub enum SimErr {
     /// Not an error, but HALT!
     ProgramHalted,
     /// A register was loaded with a partially uninitialized value.
+    /// 
+    /// This will ignore loads from the stack (R6), because those *can* be uninitialized.
+    // IDEA: So currently, the way this is implemented is that LDR Rx, R6, OFF is accepted regardless of initialization.
+    // We could make this stricter by keeping track of how much is allocated on the stack.
     StrictRegSetUninit,
+    /// Memory was loaded with a partially uninitialized value.
+    /// This will ignore stores from the stack (R6), because those *can* be uninitialized.
+    // IDEA: See above.
+    StrictMemSetUninit,
     /// Data was stored into MMIO with a partially uninitialized value.
     StrictIOSetUninit,
     /// Address to jump to is coming from an uninitialized value.
@@ -286,7 +294,7 @@ impl Simulator {
                     .wrapping_add_signed(off.get());
 
                 let val = self.mem.get(ea, self.mem_ctx(&self.io))?;
-                self.reg_file[dr].copy_word(val, self.strict, SimErr::StrictRegSetUninit)?;
+                self.reg_file[dr].copy_word(val, self.strict && br != R6, SimErr::StrictRegSetUninit)?;
                 self.set_cc(val.get());
             },
             SimInstr::STR(sr, br, off) => {
@@ -296,7 +304,8 @@ impl Simulator {
                     .wrapping_add_signed(off.get());
                 
                 let val = self.reg_file[sr];
-                self.mem.set(ea, val, self.mem_ctx(&self.io))?;
+                let mctx = MemAccessCtx { strict: self.strict && br != R6, ..self.mem_ctx(&self.io) };
+                self.mem.set(ea, val, mctx)?;
             },
             SimInstr::RTI => {
                 if self.psr.privileged() {
