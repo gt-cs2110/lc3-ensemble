@@ -9,3 +9,4 @@ pub mod parse;
 pub mod ast;
 pub mod asm;
 pub mod sim;
+pub mod err;
