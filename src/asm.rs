@@ -19,7 +19,7 @@ use logos::Span;
 use crate::ast::asm::{AsmInstr, Directive, Stmt, StmtKind};
 use crate::ast::sim::SimInstr;
 use crate::ast::{IOffset, ImmOrReg, Offset, OffsetNewErr, PCOffset, Reg};
-use crate::err::ErrSpanned;
+use crate::err::ErrSpan;
 use crate::sim::mem::Word;
 
 
@@ -113,10 +113,27 @@ impl std::fmt::Display for AsmErrKind {
 }
 
 /// Error from assembling given assembly code.
-pub type AsmErr = ErrSpanned<AsmErrKind>;
+#[derive(Debug)]
+pub struct AsmErr {
+    /// The value with a span.
+    pub kind: AsmErrKind,
+    /// The span in the source associated with this value.
+    pub span: ErrSpan
+}
+impl AsmErr {
+    /// Creates a new [`AsmErr`].
+    pub fn new<E: Into<ErrSpan>>(kind: AsmErrKind, span: E) -> Self {
+        AsmErr { kind, span: span.into() }
+    }
+}
+impl std::fmt::Display for AsmErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.kind.fmt(f)
+    }
+}
 impl std::error::Error for AsmErr {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match &self.value {
+        match &self.kind {
             AsmErrKind::OffsetNewErr(e) => Some(e),
             _ => None
         }
@@ -128,7 +145,7 @@ impl crate::err::Error for AsmErr {
     }
 
     fn help(&self) -> Option<std::borrow::Cow<str>> {
-        match &self.value {
+        match &self.kind {
             AsmErrKind::UndetAddrLabel    => Some("try moving this label inside of an .orig/.end block".into()),
             AsmErrKind::UndetAddrStmt     => Some("try moving this statement inside of an .orig/.end block".into()),
             AsmErrKind::UnclosedOrig      => Some("try adding an .end directive at the end of this block".into()),

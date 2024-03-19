@@ -30,34 +30,13 @@ pub trait Error: std::error::Error {
     fn help(&self) -> Option<Cow<str>>;
 }
 
-/// A value that has an associated error span.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ErrSpanned<K> {
-    /// The value with a span.
-    pub value: K,
-
-    /// The span in the source associated with this value.
-    pub span: ErrSpan
-}
-impl<K> ErrSpanned<K> {
-    /// Creates a new error-spanned value.
-    pub fn new<R: Into<ErrSpan>>(value: K, span: R) -> Self {
-        ErrSpanned { value, span: span.into() }
-    }
-}
-impl<K: std::fmt::Display> std::fmt::Display for ErrSpanned<K> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.value.fmt(f)
-    }
-}
-
 /// The possible source ranges for an error. 
 /// 
 /// This can be:
 /// - one contiguous span,
 /// - two contiguous spans, or
 /// - three or more contiguous spans
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum ErrSpan {
     /// One contiguous span.
     One(Span),
@@ -148,5 +127,14 @@ impl From<Vec<ErrSpan>> for ErrSpan {
             .collect();
 
         ErrSpan::from(mr)
+    }
+}
+impl std::fmt::Debug for ErrSpan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::One(r)   => r.fmt(f),
+            Self::Two(r)   => r.fmt(f),
+            Self::Many(mr) => mr.fmt(f),
+        }
     }
 }
