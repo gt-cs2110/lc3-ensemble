@@ -121,12 +121,26 @@ pub enum OffsetNewErr {
     /// The provided offset cannot fit a signed integer of the given bitsize.
     CannotFitSigned(u32)
 }
+
 impl std::fmt::Display for OffsetNewErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OffsetNewErr::CannotFitUnsigned(n) => write!(f, "value is too big for unsigned {n}-bit integer"),
             OffsetNewErr::CannotFitSigned(n) => write!(f, "value is too big for signed {n}-bit integer"),
         }
+    }
+}
+impl std::error::Error for OffsetNewErr {}
+impl crate::err::Error for OffsetNewErr {
+    fn help(&self) -> Option<std::borrow::Cow<str>> {
+        use std::borrow::Cow;
+
+        let error = match self {
+            OffsetNewErr::CannotFitUnsigned(n) => Cow::from(format!("the range for an unsigned {n}-bit integer is [0, {}]", (1 << n) - 1)),
+            OffsetNewErr::CannotFitSigned(n) => Cow::from(format!("the range for a signed {n}-bit integer is [{}, {}]", (-1) << (n - 1), (1 << (n - 1)) - 1)),
+        };
+
+        Some(error)
     }
 }
 

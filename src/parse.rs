@@ -16,9 +16,11 @@ use std::borrow::Cow;
 use logos::{Logos, Span};
 
 use crate::ast::asm::{AsmInstr, Directive, Stmt, StmtKind};
-use crate::ast::{IOffset, ImmOrReg, Offset, PCOffset};
+use crate::ast::{IOffset, ImmOrReg, Offset, OffsetNewErr, PCOffset};
 use lex::{Ident, Token};
 use simple::*;
+
+use self::lex::LexErr;
 
 /// Parses an assembly source code string into a `Vec` of statements.
 /// 
@@ -33,20 +35,78 @@ pub fn parse_ast(s: &str) -> Result<Vec<Stmt>, ParseErr> {
     }).collect::<Result<Vec<_>, _>>()
 }
 
+enum ParseErrKind {
+    OffsetNew(OffsetNewErr),
+    Lex(LexErr),
+    Parse(Cow<'static, str>)
+}
+impl From<LexErr> for ParseErrKind {
+    fn from(value: LexErr) -> Self {
+        Self::Lex(value)
+    }
+}
+impl From<OffsetNewErr> for ParseErrKind {
+    fn from(value: OffsetNewErr) -> Self {
+        Self::OffsetNew(value)
+    }
+}
 /// Any error that occurs during parsing tokens.
-#[derive(Debug)]
 pub struct ParseErr {
-    msg: Cow<'static, str>,
+    /// The brief cause of this error.
+    kind: ParseErrKind,
+    /// The location of this error.
     span: Span
 }
 impl ParseErr {
     fn new<C: Into<Cow<'static, str>>>(msg: C, span: Span) -> Self {
-        Self { msg: msg.into(), span }
+        Self { kind: ParseErrKind::Parse(msg.into()), span }
+    }
+
+    fn wrap<E: Into<ParseErrKind>>(err: E, span: Span) -> Self {
+        Self { kind: err.into(), span }
+    }
+}
+impl std::fmt::Debug for ParseErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParseErr")
+            .field("brief", match &self.kind {
+                ParseErrKind::OffsetNew(s) => s,
+                ParseErrKind::Lex(s) => s,
+                ParseErrKind::Parse(s) => s,
+            })
+            .field("span", &self.span)
+            .finish()
     }
 }
 impl std::fmt::Display for ParseErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}: {}", self.span, self.msg)
+        match &self.kind {
+            ParseErrKind::OffsetNew(e) => e.fmt(f),
+            ParseErrKind::Lex(e) => e.fmt(f),
+            ParseErrKind::Parse(s) => s.fmt(f),
+        }
+    }
+}
+impl std::error::Error for ParseErr {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match &self.kind {
+            ParseErrKind::OffsetNew(e) => Some(e),
+            ParseErrKind::Lex(e) => Some(e),
+            ParseErrKind::Parse(_) => None,
+        }
+    }
+}
+impl crate::err::Error for ParseErr {
+    fn span(&self) -> Option<std::ops::Range<usize>> {
+        Some(self.span.clone())
+    }
+        
+    fn help(&self) -> Option<Cow<str>> {
+        match &self.kind {
+            ParseErrKind::OffsetNew(e) => e.help(),
+            ParseErrKind::Lex(e) => e.help(),
+            ParseErrKind::Parse(_) => None,
+        }
     }
 }
 
@@ -75,7 +135,7 @@ impl Parser {
         let tokens = Token::lexer(stream).spanned()
             .map(|(m_token, span)| match m_token {
                 Ok(token) => Ok((token, span)),
-                Err(err)  => Err(ParseErr::new(err.to_string(), span)),
+                Err(err)  => Err(ParseErr::wrap(err, span)),
             })
             .filter(|t| !matches!(t, Ok((Token::Comment, _)))) // filter comments
             .collect::<Result<_, _>>()?;
@@ -294,14 +354,14 @@ pub mod simple {
             let off_val = match m_token {
                 Some(&Token::Unsigned(n)) => {
                     i16::try_from(n)
-                        .map_err(|_| ParseErr::new(LexErr::DoesNotFitI16.to_string(), span.clone()))
+                        .map_err(|_| ParseErr::wrap(LexErr::DoesNotFitI16, span.clone()))
                 },
                 Some(&Token::Signed(n)) => Ok(n),
                 _ => Err(ParseErr::new("expected immediate value", span.clone()))
             }?;
             
             Self::new(off_val)
-                .map_err(|s| ParseErr::new(s.to_string(), span))
+                .map_err(|s| ParseErr::wrap(s, span))
         }
     }
 
@@ -311,13 +371,13 @@ pub mod simple {
                 Some(&Token::Unsigned(n)) => Ok(n),
                 Some(&Token::Signed(n)) => {
                     u16::try_from(n)
-                        .map_err(|_| ParseErr::new(LexErr::DoesNotFitU16.to_string(), span.clone()))
+                        .map_err(|_| ParseErr::wrap(LexErr::DoesNotFitU16, span.clone()))
                 },
                 _ => Err(ParseErr::new("expected immediate value", span.clone()))
             }?;
             
             Self::new(off_val)
-                .map_err(|s| ParseErr::new(s.to_string(), span))
+                .map_err(|s| ParseErr::wrap(s, span))
         }
     }
 }
@@ -447,6 +507,7 @@ impl Parse for Directive {
     fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
         use Either::*;
 
+        let cursor = parser.cursor();
         let directive = parser.advance_if(|mt, span| match mt {
             Some(Token::Directive(id)) => Ok(id.to_string()),
             _ => Err(ParseErr::new("expected directive", span))
@@ -480,7 +541,7 @@ impl Parse for Directive {
                 Ok(Self::Stringz(s))
             }
             "END" => Ok(Self::End),
-            _ => Err(ParseErr::new("invalid directive", parser.cursor()))
+            _ => Err(ParseErr::new("invalid directive", cursor))
         }
     }
 }

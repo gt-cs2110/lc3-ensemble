@@ -141,6 +141,19 @@ impl std::fmt::Display for LexErr {
         }
     }
 }
+impl std::error::Error for LexErr {}
+impl crate::err::Error for LexErr {
+    fn help(&self) -> Option<std::borrow::Cow<str>> {
+        match self {
+            LexErr::DoesNotFitU16  => Some(format!("the range for a 16-bit unsigned integer is [{}, {}]", u16::MIN, u16::MAX).into()),
+            LexErr::DoesNotFitI16  => Some(format!("the range for a 16-bit signed integer is [{}, {}]", i16::MIN, i16::MAX).into()),
+            LexErr::InvalidHex     => Some("a hex literal starts with 'x' and consists of digits from 0-9, A-F".into()),
+            LexErr::InvalidNumeric => Some("a numeric literal should only have 0-9".into()),
+            LexErr::UnknownIntErr  => None,
+            LexErr::InvalidSymbol  => Some("this symbol does not occur in any token in LC-3 assembly".into()),
+        }
+    }
+}
 /// Helper that converts an int error kind to its corresponding LexErr, based on the provided inputs.
 fn convert_int_error(e: &std::num::IntErrorKind, invalid_fmt_err: LexErr, overflow_err: LexErr) -> LexErr {
     match e {
