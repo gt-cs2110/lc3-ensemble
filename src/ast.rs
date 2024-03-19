@@ -6,8 +6,6 @@ pub mod sim;
 use std::fmt::Write as _;
 use offset_base::OffsetBacking;
 
-use self::asm::SpannedLabel;
-
 /// A register. Must be between 0 and 7.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Reg(pub(crate) u8);
@@ -241,7 +239,7 @@ pub enum PCOffset<OFF, const N: u32> {
     #[allow(missing_docs)]
     Offset(Offset<OFF, N>),
     #[allow(missing_docs)]
-    Label(SpannedLabel)
+    Label(Label)
 }
 impl<OFF, const N: u32> std::fmt::Display for PCOffset<OFF, N> 
     where Offset<OFF, N>: std::fmt::Display
@@ -251,5 +249,39 @@ impl<OFF, const N: u32> std::fmt::Display for PCOffset<OFF, N>
             PCOffset::Offset(off)  => off.fmt(f),
             PCOffset::Label(label) => label.fmt(f),
         }
+    }
+}
+
+/// A label.
+/// 
+/// Alongside storing the name of the label, 
+/// this struct also keeps track of where the label is in the assembly source code.
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Default)]
+pub struct Label {
+    /// The label's identifier
+    pub name: String,
+
+    /// The start of the label in assembly source code.
+    /// 
+    /// Since name stores the length of the string,
+    /// we don't need to store the whole span.
+    /// 
+    /// This saves like 8 bytes of space on a 64-bit machine, so ya know
+    start: usize
+}
+impl Label {
+    /// Creates a new label.
+    pub fn new(name: String, span: std::ops::Range<usize>) -> Self {
+        debug_assert_eq!(span.start + name.len(), span.end, "span should have the same length as name");
+        Label { name, start: span.start }
+    }
+    /// Returns the span of the label in assembly source code.
+    pub fn span(&self) -> std::ops::Range<usize> {
+        self.start .. (self.start + self.name.len())
+    }
+}
+impl std::fmt::Display for Label {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.name.fmt(f)
     }
 }

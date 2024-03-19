@@ -10,7 +10,7 @@
 //! [`sim::SimInstr`]: [`crate::ast::sim::SimInstr`]
 use std::fmt::Write as _;
 
-use super::{CondCode, IOffset, ImmOrReg, Offset, PCOffset, Reg, TrapVect8};
+use super::{CondCode, IOffset, ImmOrReg, Label, Offset, PCOffset, Reg, TrapVect8};
 
 
 type PCOffset9 = PCOffset<i16, 9>;
@@ -446,20 +446,6 @@ impl std::fmt::Display for StmtKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SpannedLabel {
-    /// The label
-    pub label: String,
-
-    /// The span in the source associated with the label
-    pub span: std::ops::Range<usize>
-}
-impl std::fmt::Display for SpannedLabel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.label.fmt(f)
-    }
-}
-
 /// A "statement" in LC-3 assembly.
 /// 
 /// While not a defined term in LC-3 assembly, 
@@ -468,7 +454,7 @@ impl std::fmt::Display for SpannedLabel {
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct Stmt {
     /// The labels.
-    pub labels: Vec<SpannedLabel>,
+    pub labels: Vec<Label>,
     /// The instruction or directive.
     pub nucleus: StmtKind,
     /// The span of the nucleus.

@@ -16,7 +16,7 @@ use std::ops::Range;
 
 use logos::{Logos, Span};
 
-use crate::ast::asm::{AsmInstr, Directive, SpannedLabel, Stmt, StmtKind};
+use crate::ast::asm::{AsmInstr, Directive, Stmt, StmtKind};
 use crate::ast::{IOffset, ImmOrReg, Offset, OffsetNewErr, PCOffset};
 use lex::{Ident, Token};
 use simple::*;
@@ -246,10 +246,9 @@ impl<OFF, const N: u32> Parse for PCOffset<OFF, N>
     where Offset<OFF, N>: TokenParse
 {
     fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
-        let span = parser.cursor();
         match parser.match_()? {
             Some(Either::Left(off)) => Ok(PCOffset::Offset(off)),
-            Some(Either::Right(Label(label))) => Ok(PCOffset::Label(SpannedLabel { label, span })),
+            Some(Either::Right(label)) => Ok(PCOffset::Label(label)),
             None => Err(ParseErr::new("expected offset or label", parser.cursor()))
         }
     }
@@ -269,7 +268,7 @@ impl<OFF, const N: u32> Parse for PCOffset<OFF, N>
 pub mod simple {
     use logos::Span;
 
-    use crate::ast::{Offset, Reg};
+    use crate::ast::{Label, Offset, Reg};
 
     use super::lex::{Ident, LexErr, Token};
     use super::{Parse, ParseErr, Parser};
@@ -337,24 +336,6 @@ pub mod simple {
             }
         }
         
-        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
-            Ok(imed)
-        }
-    }
-
-    /// A label.
-    #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Default)]
-    pub struct Label(pub String);
-    impl TokenParse for Label {
-        type Intermediate = Self;
-
-        fn match_(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
-            match m_token {
-                Some(Token::Ident(Ident::Label(s))) => Ok(Label(s.to_string())),
-                _ => Err(ParseErr::new("expected label", span))
-            }
-        }
-
         fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
             Ok(imed)
         }
@@ -486,6 +467,21 @@ pub mod simple {
             
             Self::new(off_val)
                 .map_err(|s| ParseErr::wrap(s, span))
+        }
+    }
+
+    impl TokenParse for Label {
+        type Intermediate = Self;
+
+        fn match_(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
+            match m_token {
+                Some(Token::Ident(Ident::Label(s))) => Ok(Label::new(s.to_string(), span)),
+                _ => Err(ParseErr::new("expected label", span))
+            }
+        }
+
+        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
+            Ok(imed)
         }
     }
 }
@@ -629,10 +625,10 @@ impl Parse for Directive {
                 // Unlike other numeric operands, it can accept both unsigned and signed literals,
                 // so it cannot be parsed with PCOffset's parser and has to be handled differently.
                 let span = parser.cursor();
-                let operand = match parser.match_::<Either<Label, Either<Offset<u16, 16>, IOffset<16>>>>()? {
-                    Some(Left(Label(label))) => Ok(PCOffset::Label(SpannedLabel { label, span })),
-                    Some(Right(Left(off)))   => Ok(PCOffset::Offset(off)),
-                    Some(Right(Right(off)))  => Ok(PCOffset::Offset(Offset::new_trunc(off.get() as u16))),
+                let operand = match parser.match_::<Either<_, Either<_, IOffset<16>>>>()? {
+                    Some(Left(label))       => Ok(PCOffset::Label(label)),
+                    Some(Right(Left(off)))  => Ok(PCOffset::Offset(off)),
+                    Some(Right(Right(off))) => Ok(PCOffset::Offset(Offset::new_trunc(off.get() as u16))),
                     _ => Err(ParseErr::new("expected numeric or label", span))
                 }?;
 
@@ -682,11 +678,11 @@ impl Parse for Stmt {
         while !parser.is_empty() {
             let span = parser.cursor();
             match parser.match_()? {
-                Some(Either::Left(Label(label))) => {
+                Some(Either::Left(label)) => {
                     parser.match_::<Colon>()?; // skip colon if it exists
 
                     last_label_span.replace(span.clone());
-                    labels.push(SpannedLabel { label, span });
+                    labels.push(label);
                 }
                 Some(Either::Right(End)) => {},
                 _ => break

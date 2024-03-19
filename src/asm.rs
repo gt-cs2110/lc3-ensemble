@@ -162,19 +162,19 @@ impl SymbolTable {
             if !stmt.labels.is_empty() {
                 let Some((addr, _)) = lc else {
                     let spans = stmt.labels.iter()
-                        .map(|label| label.span.clone())
+                        .map(|label| label.span())
                         .collect::<Vec<_>>();
                     
                     return Err(AsmErr::new(AsmErrKind::UndetAddrLabel, spans));
                 };
 
                 for label in &stmt.labels {
-                    match labels.entry(label.label.to_uppercase()) {
+                    match labels.entry(label.name.to_uppercase()) {
                         Entry::Occupied(e) => {
                             let (_, span1) = e.get();
-                            return Err(AsmErr::new(AsmErrKind::OverlappingLabels, [span1.clone(), label.span.clone()]))
+                            return Err(AsmErr::new(AsmErrKind::OverlappingLabels, [span1.clone(), label.span()]))
                         },
-                        Entry::Vacant(e) => e.insert((addr, label.span.clone())),
+                        Entry::Vacant(e) => e.insert((addr, label.span())),
                     };
                 }
             }
@@ -216,9 +216,9 @@ fn replace_pc_offset<const N: u32>(off: PCOffset<i16, N>, lc: u16, sym: &SymbolT
     match off {
         PCOffset::Offset(off) => Ok(off),
         PCOffset::Label(label) => {
-            let Some(loc) = sym.get(&label.label) else { return Err(AsmErr::new(AsmErrKind::CouldNotFindLabel, label.span)) };
+            let Some(loc) = sym.get(&label.name) else { return Err(AsmErr::new(AsmErrKind::CouldNotFindLabel, label.span())) };
             IOffset::new(loc.wrapping_sub(lc) as i16)
-                .map_err(|e| AsmErr::new(AsmErrKind::OffsetNewErr(e), label.span))
+                .map_err(|e| AsmErr::new(AsmErrKind::OffsetNewErr(e), label.span()))
         },
     }
 }
@@ -266,7 +266,10 @@ impl Directive {
             Directive::Fill(pc_offset) => {
                 let off = match pc_offset {
                     PCOffset::Offset(o) => o.get(),
-                    PCOffset::Label(l)  => labels.get(&l.label).ok_or_else(|| AsmErr::new(AsmErrKind::CouldNotFindLabel, l.span))?,
+                    PCOffset::Label(l)  => {
+                        labels.get(&l.name)
+                            .ok_or_else(|| AsmErr::new(AsmErrKind::CouldNotFindLabel, l.span()))?
+                    },
                 };
 
                 block.push(off);
