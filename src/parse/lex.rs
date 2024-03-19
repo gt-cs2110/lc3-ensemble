@@ -52,7 +52,7 @@ pub enum Token {
     Directive(String),
 
     /// A string literal (e.g., `"Hello!"`)
-    #[regex(r#""(:?[^\\"]|\\.)*""#, lex_str_literal)]
+    #[token(r#"""#, lex_str_literal)]
     String(String),
 
     /// A colon, which can optionally appear after labels
@@ -135,6 +135,10 @@ pub enum LexErr {
     InvalidNumericEmpty,
     /// Int parsing failed but the reason why is unknown
     UnknownIntErr,
+    /// String literal is missing an end quotation mark.
+    UnclosedStrLiteral,
+    /// String literal is missing an end quotation mark.
+    StrLiteralTooBig,
     /// Token had the format R\d, but \d isn't 0-7.
     InvalidReg,
     /// A symbol was used which is not allowed in LC3 assembly files
@@ -151,6 +155,8 @@ impl std::fmt::Display for LexErr {
             LexErr::InvalidHexEmpty     => f.write_str("invalid hex literal"),
             LexErr::InvalidNumericEmpty => f.write_str("invalid decimal literal"),
             LexErr::UnknownIntErr       => f.write_str("could not parse integer"),
+            LexErr::UnclosedStrLiteral  => f.write_str("unclosed string literal"),
+            LexErr::StrLiteralTooBig    => f.write_str("string literal is too large"),
             LexErr::InvalidReg          => f.write_str("invalid register"),
             LexErr::InvalidSymbol       => f.write_str("unrecognized symbol"),
         }
@@ -167,6 +173,8 @@ impl crate::err::Error for LexErr {
             LexErr::InvalidHexEmpty     => Some("there should be hex digits (0-9, A-F) here".into()),
             LexErr::InvalidNumericEmpty => Some("there should be digits (0-9) here".into()),
             LexErr::UnknownIntErr       => None,
+            LexErr::UnclosedStrLiteral  => Some("add a quote to the end of the string literal".into()),
+            LexErr::StrLiteralTooBig    => Some(format!("string literals are limited to at most {} characters", u16::MAX).into()),
             LexErr::InvalidReg          => Some("this must be R0-R7".into()),
             LexErr::InvalidSymbol       => Some("this char does not occur in any token in LC-3 assembly".into()),
         }
@@ -230,7 +238,26 @@ fn lex_reg(lx: &Lexer<'_, Token>) -> Result<u8, LexErr> {
         .filter(|&r| r < 8)
         .ok_or(LexErr::InvalidReg)
 }
-fn lex_str_literal(lx: &Lexer<'_, Token>) -> String {
+fn lex_str_literal(lx: &mut Lexer<'_, Token>) -> Result<String, LexErr> {
+    let rem = lx.remainder()
+        .lines()
+        .next()
+        .unwrap_or("");
+
+    // calculate the length of the string literal ignoring the quotes
+    // consume tokens up to the end of the literal and including the unescaped quote
+    let mlen = rem.match_indices('"')
+        .map(|(n, _)| n)
+        .find(|&n| !matches!(rem.get((n - 1)..(n + 1)), Some("\\\"")));
+    
+    match mlen {
+        Some(len) => lx.bump(len + 1),
+        None => {
+            lx.bump(rem.len());
+            return Err(LexErr::UnclosedStrLiteral);
+        }
+    }
+
     // get the string inside quotes:
     let mut remaining = &lx.slice()[1..(lx.slice().len() - 1)];
     let mut buf = String::with_capacity(remaining.len());
@@ -260,5 +287,9 @@ fn lex_str_literal(lx: &Lexer<'_, Token>) -> String {
         remaining = &right[1..];
     }
     buf.push_str(remaining);
-    buf
+    
+    match buf.len() <= usize::from(u16::MAX) {
+        true  => Ok(buf),
+        false => Err(LexErr::StrLiteralTooBig),
+    }
 }
