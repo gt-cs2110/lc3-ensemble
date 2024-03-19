@@ -127,8 +127,12 @@ impl std::ops::Add for Word {
         let Self { data: ldata, init: linit } = self;
         let Self { data: rdata, init: rinit } = rhs;
 
+        if rdata == 0 && rinit == ALL_BITS { return self; }
+        if ldata == 0 && linit == ALL_BITS { return rhs; }
+
         let data = ldata.wrapping_add(rdata);
-        // Very lazy initialization scheme.
+
+        // Close enough calculation:
         // If both are fully init, consider this word fully init.
         // Otherwise, consider it fully uninit.
         let init = match linit == ALL_BITS && rinit == ALL_BITS {
@@ -177,6 +181,9 @@ impl std::ops::Sub for Word {
     fn sub(self, rhs: Self) -> Self::Output {
         let Self { data: ldata, init: linit } = self;
         let Self { data: rdata, init: rinit } = rhs;
+
+        // This is (self - 0) == self.
+        if rdata == 0 && rinit == ALL_BITS { return self; }
 
         let data = ldata.wrapping_sub(rdata);
         // Very lazy initialization scheme.
