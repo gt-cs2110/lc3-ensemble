@@ -41,7 +41,7 @@ impl Word {
     /// Creates a new word that is considered uninitialized.
     pub fn new_uninit() -> Self {
         Self {
-            data: 0,
+            data: rand::random(),
             init: NO_BITS,
         }
     }

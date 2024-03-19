@@ -249,8 +249,8 @@ impl ObjBlock {
     }
     fn shift(&mut self, n: u16) {
         self.words.extend({
-            std::iter::from_fn(|| Some(Word::new_uninit()))
-                .take(n as usize)
+            std::iter::repeat_with(Word::new_uninit)
+                .take(usize::from(n))
         });
     }
 }
