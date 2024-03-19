@@ -701,6 +701,11 @@ impl Parse for Stmt {
             }
         })?;
 
+        // assert end of line at end of statement
+        parser.parse::<End>()?;
+        // consume any extra NLs
+        while !parser.is_empty() && parser.match_::<End>()?.is_some() {}
+
         Ok(Self { labels, nucleus, span })
     }
 }
