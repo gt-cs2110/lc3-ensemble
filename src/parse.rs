@@ -54,16 +54,23 @@ impl From<OffsetNewErr> for ParseErrKind {
 pub struct ParseErr {
     /// The brief cause of this error.
     kind: ParseErrKind,
+    /// Some kind of help (if it exists)
+    help: Cow<'static, str>,
     /// The location of this error.
     span: Span
 }
 impl ParseErr {
-    fn new<C: Into<Cow<'static, str>>>(msg: C, span: Span) -> Self {
-        Self { kind: ParseErrKind::Parse(msg.into()), span }
+    fn new<S: Into<Cow<'static, str>>>(msg: S, span: Span) -> Self {
+        Self { kind: ParseErrKind::Parse(msg.into()), help: Cow::Borrowed(""), span }
     }
 
     fn wrap<E: Into<ParseErrKind>>(err: E, span: Span) -> Self {
-        Self { kind: err.into(), span }
+        Self { kind: err.into(), help: Cow::Borrowed(""), span }
+    }
+
+    fn with_help<S: Into<Cow<'static, str>>>(mut self, help: S) -> Self {
+        self.help = help.into();
+        self
     }
 }
 impl std::fmt::Debug for ParseErr {
@@ -105,7 +112,7 @@ impl crate::err::Error for ParseErr {
         match &self.kind {
             ParseErrKind::OffsetNew(e) => e.help(),
             ParseErrKind::Lex(e) => e.help(),
-            ParseErrKind::Parse(_) => None,
+            ParseErrKind::Parse(_) => Some(Cow::Borrowed(&self.help)),
         }
     }
 }
@@ -168,13 +175,16 @@ impl Parser {
         P::parse(self)
     }
 
-    /// Consumes the next token if it represents the corresponding component.
+    /// Check if the next token matches the given component and consume it if so.
     /// 
-    /// This will not consume the next token if matching fails.
-    pub fn match_<P: SimpleParse>(&mut self) -> Option<P> {
-        // This is allowed because it's assured by SimpleParse's contract
-        // that this does not consume input.
-        self.parse().ok()
+    /// This function can error if the next token *does* match the given component,
+    /// but an error occurs in trying to convert it to that component.
+    pub fn match_<P: TokenParse>(&mut self) -> Result<Option<P>, ParseErr> {
+        let span = self.cursor();
+        match self.advance_if(P::match_) {
+            Ok(t)  => P::convert(t, span).map(Some),
+            Err(_) => Ok(None),
+        }
     }
 
     /// Applies the provided predicate to the next token in the input.
@@ -200,7 +210,7 @@ impl Parser {
 
 impl<const N: u32> Parse for ImmOrReg<N> {
     fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
-        match parser.match_() {
+        match parser.match_()? {
             Some(Either::Left(imm))  => Ok(ImmOrReg::Imm(imm)),
             Some(Either::Right(reg)) => Ok(ImmOrReg::Reg(reg)),
             None => Err(ParseErr::new("expected register or immediate value", parser.cursor()))
@@ -209,10 +219,10 @@ impl<const N: u32> Parse for ImmOrReg<N> {
 }
 
 impl<OFF, const N: u32> Parse for PCOffset<OFF, N> 
-    where Offset<OFF, N>: SimpleParse
+    where Offset<OFF, N>: TokenParse
 {
     fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
-        match parser.match_() {
+        match parser.match_()? {
             Some(Either::Left(off)) => Ok(PCOffset::Offset(off)),
             Some(Either::Right(Label(s))) => Ok(PCOffset::Label(s)),
             None => Err(ParseErr::new("expected offset or label", parser.cursor()))
@@ -248,73 +258,116 @@ pub mod simple {
     /// which only advances if parsing passes.
     /// 
     /// [`Parser::match_`]: super::Parser::match_
-    pub trait SimpleParse: Sized {
-        /// Tries to parse the provided token as a component, erroring if not possible.
-        fn try_parse(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr>;
+    pub trait TokenParse: Sized {
+        /// An intermediate to hold the match before it is converted to the actual component.
+        type Intermediate;
+
+        /// Tries to match the next token to the given component, if possible.
+        /// 
+        /// If successful, this returns some value and the parser advances. 
+        /// If unsuccessful, this returns an error and the parser does not advance.
+        /// 
+        /// The value returned is an intermediate value which is later converted to the desired component.
+        fn match_(m_token: Option<&Token>, span: Span) -> Result<Self::Intermediate, ParseErr>;
+
+        /// Parses the intermediate into the given component, raising an error if conversion fails.
+        fn convert(imed: Self::Intermediate, span: Span) -> Result<Self, ParseErr>;
     }
-    impl<S: SimpleParse> Parse for S {
+    impl<S: TokenParse> Parse for S {
         fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
-            parser.advance_if(S::try_parse)
+            let span = parser.cursor();
+            let imed = parser.advance_if(S::match_)?;
+            S::convert(imed, span)
         }
     }
 
     /// Comma.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Default)]
     pub struct Comma;
-    impl SimpleParse for Comma {
-        fn try_parse(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
+    impl TokenParse for Comma {
+        type Intermediate = Self;
+        
+        fn match_(m_token: Option<&Token>, span: Span) -> Result<Self::Intermediate, ParseErr> {
             match m_token {
                 Some(Token::Comma) => Ok(Comma),
                 _ => Err(ParseErr::new("expected comma", span))
             }
+        }
+        
+        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
+            Ok(imed)
         }
     }
 
     /// Colon.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Default)]
     pub struct Colon;
-    impl SimpleParse for Colon {
-        fn try_parse(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
+    impl TokenParse for Colon {
+        type Intermediate = Self;
+
+        fn match_(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
             match m_token {
                 Some(Token::Colon) => Ok(Colon),
-                _ => Err(ParseErr::new("expected comma", span))
+                _ => Err(ParseErr::new("expected colon", span))
             }
+        }
+        
+        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
+            Ok(imed)
         }
     }
 
     /// A label.
     #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Default)]
     pub struct Label(pub String);
-    impl SimpleParse for Label {
-        fn try_parse(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
+    impl TokenParse for Label {
+        type Intermediate = Self;
+
+        fn match_(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
             match m_token {
                 Some(Token::Ident(Ident::Label(s))) => Ok(Label(s.to_string())),
                 _ => Err(ParseErr::new("expected label", span))
             }
+        }
+
+        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
+            Ok(imed)
         }
     }
 
     /// A string literal.
     #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Default)]
     pub struct StrLiteral(pub String);
-    impl SimpleParse for StrLiteral {
-        fn try_parse(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
+    impl TokenParse for StrLiteral {
+        type Intermediate = Self;
+
+        fn match_(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
             match m_token {
                 Some(Token::String(s)) => Ok(StrLiteral(s.to_string())),
                 _ => Err(ParseErr::new("expected string literal", span))
             }
+        }
+
+        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
+            Ok(imed)
         }
     }
 
     /// The end of a line or input.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Default)]
     pub struct End;
-    impl SimpleParse for End {
-        fn try_parse(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
+    impl TokenParse for End {
+        type Intermediate = Self;
+
+        fn match_(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
             match m_token {
                 None | Some(Token::NewLine) => Ok(End),
                 _ => Err(ParseErr::new("expected end of line", span))
             }
+        }
+
+        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
+            Ok(imed)
         }
     }
 
@@ -328,53 +381,83 @@ pub mod simple {
         /// The second possible component.
         Right(R)
     }
-    impl<L: SimpleParse, R: SimpleParse> SimpleParse for Either<L, R> {
-        fn try_parse(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
-            match L::try_parse(m_token, span.clone()) {
+    impl<L: TokenParse, R: TokenParse> TokenParse for Either<L, R> {
+        type Intermediate = Either<L::Intermediate, R::Intermediate>;
+        fn match_(m_token: Option<&Token>, span: Span) -> Result<Self::Intermediate, ParseErr> {
+            match L::match_(m_token, span.clone()) {
                 Ok(t) => Ok(Either::Left(t)),
-                Err(_) => match R::try_parse(m_token, span.clone()) {
+                Err(_) => match R::match_(m_token, span.clone()) {
                     Ok(u) => Ok(Either::Right(u)),
                     Err(_) => Err(ParseErr::new("could not parse", span)),
                 },
             }
         }
+        
+        fn convert(imed: Self::Intermediate, span: Span) -> Result<Self, ParseErr> {
+            match imed {
+                Either::Left(l)  => L::convert(l, span).map(Either::Left),
+                Either::Right(r) => R::convert(r, span).map(Either::Right),
+            }
+        }
     }
 
-    impl SimpleParse for Reg {
-        fn try_parse(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
+    impl TokenParse for Reg {
+        type Intermediate = Self;
+
+        fn match_(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
             match m_token {
                 Some(&Token::Reg(reg)) => Ok(Reg(reg)),
                 _ => Err(ParseErr::new("expected register", span))
             }
         }
+                
+        fn convert(imed: Self::Intermediate, _span: Span) -> Result<Self, ParseErr> {
+            Ok(imed)
+        }
     }
 
-    impl<const N: u32> SimpleParse for Offset<i16, N> {
-        fn try_parse(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
-            let off_val = match m_token {
-                Some(&Token::Unsigned(n)) => {
-                    i16::try_from(n)
-                        .map_err(|_| ParseErr::wrap(LexErr::DoesNotFitI16, span.clone()))
-                },
-                Some(&Token::Signed(n)) => Ok(n),
+    impl<const N: u32> TokenParse for Offset<i16, N> {
+        type Intermediate = Either<i16, u16>;
+
+        fn match_(m_token: Option<&Token>, span: Span) -> Result<Self::Intermediate, ParseErr> {
+            match m_token {
+                Some(&Token::Unsigned(n)) => Ok(Either::Right(n)),
+                Some(&Token::Signed(n))   => Ok(Either::Left(n)),
                 _ => Err(ParseErr::new("expected immediate value", span.clone()))
-            }?;
+            }
+        }
+        
+        fn convert(imed: Self::Intermediate, span: Span) -> Result<Self, ParseErr> {
+            let off_val = match imed {
+                Either::Left(n)  => n,
+                Either::Right(n) => {
+                    <_>::try_from(n).map_err(|_| ParseErr::wrap(LexErr::DoesNotFitI16, span.clone()))?
+                },
+            };
             
             Self::new(off_val)
                 .map_err(|s| ParseErr::wrap(s, span))
         }
     }
 
-    impl<const N: u32> SimpleParse for Offset<u16, N> {
-        fn try_parse(m_token: Option<&Token>, span: Span) -> Result<Self, ParseErr> {
-            let off_val = match m_token {
-                Some(&Token::Unsigned(n)) => Ok(n),
-                Some(&Token::Signed(n)) => {
-                    u16::try_from(n)
-                        .map_err(|_| ParseErr::wrap(LexErr::DoesNotFitU16, span.clone()))
-                },
+    impl<const N: u32> TokenParse for Offset<u16, N> {
+        type Intermediate = Either<u16, i16>;
+
+        fn match_(m_token: Option<&Token>, span: Span) -> Result<Self::Intermediate, ParseErr> {
+            match m_token {
+                Some(&Token::Unsigned(n)) => Ok(Either::Left(n)),
+                Some(&Token::Signed(n))   => Ok(Either::Right(n)),
                 _ => Err(ParseErr::new("expected immediate value", span.clone()))
-            }?;
+            }
+        }
+        
+        fn convert(imed: Self::Intermediate, span: Span) -> Result<Self, ParseErr> {
+            let off_val = match imed {
+                Either::Left(n)  => n,
+                Either::Right(n) => {
+                    <_>::try_from(n).map_err(|_| ParseErr::wrap(LexErr::DoesNotFitU16, span.clone()))?
+                },
+            };
             
             Self::new(off_val)
                 .map_err(|s| ParseErr::wrap(s, span))
@@ -520,20 +603,22 @@ impl Parse for Directive {
                 //
                 // Unlike other numeric operands, it can accept both unsigned and signed literals,
                 // so it cannot be parsed with PCOffset's parser and has to be handled differently.
-                let operand = match parser.match_::<Either<Label, Either<Offset<u16, 16>, IOffset<16>>>>() {
+                let span = parser.cursor();
+                let operand = match parser.match_::<Either<Label, Either<Offset<u16, 16>, IOffset<16>>>>()? {
                     Some(Left(Label(s)))    => Ok(PCOffset::Label(s)),
                     Some(Right(Left(off)))  => Ok(PCOffset::Offset(off)),
                     Some(Right(Right(off))) => Ok(PCOffset::Offset(Offset::new_trunc(off.get() as u16))),
-                    _ => Err(ParseErr::new("expected numeric or label", parser.cursor()))
+                    _ => Err(ParseErr::new("expected numeric or label", span))
                 }?;
 
                 Ok(Self::Fill(operand))
             }
             "BLKW" => {
+                let span = parser.cursor();
                 let block_size: Offset<_, 16> = parser.parse()?;
                 match block_size.get() != 0 {
                     true  => Ok(Self::Blkw(block_size)),
-                    false => Err(ParseErr::new("block size must be greater than 0", parser.cursor()))
+                    false => Err(ParseErr::new("block size must be greater than 0", span))
                 }
             }
             "STRINGZ" => {
@@ -541,13 +626,18 @@ impl Parse for Directive {
                 Ok(Self::Stringz(s))
             }
             "END" => Ok(Self::End),
-            _ => Err(ParseErr::new("invalid directive", cursor))
+            _ => Err({
+                ParseErr::new("invalid directive", cursor)
+                    .with_help("the valid directives are .orig, .fill, .blkw, .stringz, .end")
+            })
         }
     }
 }
 
 impl Parse for StmtKind {
     fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
+        // This parser exists for consistency, but is not actually used.
+        // See it used in the implementation of nucleus in Stmt.
         match parser.peek() {
             Some((Token::Directive(_), _)) => Ok(StmtKind::Directive(parser.parse()?)),
             Some((Token::Ident(id), _)) if !matches!(id, Ident::Label(_)) => Ok(StmtKind::Instr(parser.parse()?)),
@@ -559,11 +649,18 @@ impl Parse for Stmt {
     fn parse(parser: &mut Parser) -> Result<Self, ParseErr> {
         let mut labels = vec![];
 
+        // gets the span of the last token
+        // useful for better error messages
+        let mut last_label_span = None;
+
         // Scan through labels and new lines until we find an instruction
         while !parser.is_empty() {
-            match parser.match_() {
+            let span = parser.cursor();
+            match parser.match_()? {
                 Some(Either::Left(Label(label))) => {
-                    parser.match_::<Colon>(); // skip colon if it exists
+                    parser.match_::<Colon>()?; // skip colon if it exists
+
+                    last_label_span.replace(span);
                     labels.push(label);
                 }
                 Some(Either::Right(End)) => {},
@@ -571,8 +668,15 @@ impl Parse for Stmt {
             }
         }
         
-        let nucleus = parser.parse()?;
-        parser.parse::<End>()?;
+        let nucleus = match parser.peek() {
+            Some((Token::Directive(_), _)) => Ok(StmtKind::Directive(parser.parse()?)),
+            Some((Token::Ident(id), _)) if !matches!(id, Ident::Label(_)) => Ok(StmtKind::Instr(parser.parse()?)),
+            _ => {
+                // Parser didn't find a directive or instruction following a label.
+                // Chances are the label was just a misspelled instruction.
+                Err(ParseErr::new("expected instruction or directive", last_label_span.unwrap_or(parser.cursor())))
+            }
+        }?;
 
         Ok(Self { labels, nucleus })
     }

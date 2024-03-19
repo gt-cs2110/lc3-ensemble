@@ -15,20 +15,26 @@ use logos::{Lexer, Logos};
 #[derive(Debug, Logos, PartialEq, Eq)]
 #[logos(skip r"[ \t]+", error = LexErr)]
 pub enum Token {
+    // Note, these regexes span over tokens that are technically invalid 
+    // (e.g., 23trst matches for unsigned even though it shouldn't).
+    // This is intended.
+    // These regexes collect what would be considered one discernable unit
+    // and validates it using the validator function.
+
     /// An unsigned numeric value (e.g., `9`, `#14`, x7F`, etc.)
-    #[regex(r"\d+", lex_unsigned_dec)]
-    #[regex(r"#\d+", lex_unsigned_dec)]
-    #[regex(r"[Xx][\dA-Fa-f]+", lex_unsigned_hex)]
+    #[regex(r"\d\w*", lex_unsigned_dec)]
+    #[regex(r"#\d?\w*", lex_unsigned_dec)]
+    #[regex(r"[Xx][\dA-Fa-f]\w*", lex_unsigned_hex)]
     Unsigned(u16),
 
     /// A signed numeric value (e.g., `-9`, `#-14`, x-7F`, etc.)
-    #[regex(r"-\d+", lex_signed_dec)]
-    #[regex(r"#-\d+", lex_signed_dec)]
-    #[regex(r"[Xx]-[\dA-Fa-f]+", lex_signed_hex)]
+    #[regex(r"-\w*", lex_signed_dec)]
+    #[regex(r"#-\w*", lex_signed_dec)]
+    #[regex(r"[Xx]-\w*", lex_signed_hex)]
     Signed(i16),
 
     /// A register value (i.e., `R0`-`R7`)
-    #[regex(r"[Rr][0-7]", lex_reg)]
+    #[regex(r"[Rr]\d+", lex_reg)]
     Reg(u8),
 
     /// An identifier.
@@ -119,12 +125,18 @@ pub enum LexErr {
     DoesNotFitU16,
     /// Numeric literal (signed dec) cannot fit within the range of a i16
     DoesNotFitI16,
-    /// Hex literal (starting with 0x or x) has invalid hex digits (or there is nothing following)
+    /// Hex literal (starting with x) has invalid hex digits
     InvalidHex,
-    /// Numeric literal could not be parsed as a decimal literal (typically because it's just `#` or `#-` or `-`)
+    /// Numeric literal could not be parsed as a decimal literal because it has invalid digits (i.e., not 0-9)
     InvalidNumeric,
+    /// Hex literal (starting with x) doesn't have digits after it.
+    InvalidHexEmpty,
+    /// Numeric literal could not be parsed as a decimal literal because there are no digits in it (it's just # or #-)
+    InvalidNumericEmpty,
     /// Int parsing failed but the reason why is unknown
     UnknownIntErr,
+    /// Token had the format R\d, but \d isn't 0-7.
+    InvalidReg,
     /// A symbol was used which is not allowed in LC3 assembly files
     #[default]
     InvalidSymbol
@@ -132,12 +144,15 @@ pub enum LexErr {
 impl std::fmt::Display for LexErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LexErr::DoesNotFitU16  => f.write_str("numeric token does not fit 16-bit unsigned integer"),
-            LexErr::DoesNotFitI16  => f.write_str("numeric token does not fit 16-bit signed integer"),
-            LexErr::InvalidHex     => f.write_str("invalid hex literal"),
-            LexErr::InvalidNumeric => f.write_str("invalid decimal literal"),
-            LexErr::UnknownIntErr  => f.write_str("could not parse integer"),
-            LexErr::InvalidSymbol  => f.write_str("unrecognized symbol"),
+            LexErr::DoesNotFitU16       => f.write_str("numeric token does not fit 16-bit unsigned integer"),
+            LexErr::DoesNotFitI16       => f.write_str("numeric token does not fit 16-bit signed integer"),
+            LexErr::InvalidHex          => f.write_str("invalid hex literal"),
+            LexErr::InvalidNumeric      => f.write_str("invalid decimal literal"),
+            LexErr::InvalidHexEmpty     => f.write_str("invalid hex literal"),
+            LexErr::InvalidNumericEmpty => f.write_str("invalid decimal literal"),
+            LexErr::UnknownIntErr       => f.write_str("could not parse integer"),
+            LexErr::InvalidReg          => f.write_str("invalid register"),
+            LexErr::InvalidSymbol       => f.write_str("unrecognized symbol"),
         }
     }
 }
@@ -145,20 +160,30 @@ impl std::error::Error for LexErr {}
 impl crate::err::Error for LexErr {
     fn help(&self) -> Option<std::borrow::Cow<str>> {
         match self {
-            LexErr::DoesNotFitU16  => Some(format!("the range for a 16-bit unsigned integer is [{}, {}]", u16::MIN, u16::MAX).into()),
-            LexErr::DoesNotFitI16  => Some(format!("the range for a 16-bit signed integer is [{}, {}]", i16::MIN, i16::MAX).into()),
-            LexErr::InvalidHex     => Some("a hex literal starts with 'x' and consists of digits from 0-9, A-F".into()),
-            LexErr::InvalidNumeric => Some("a numeric literal should only have 0-9".into()),
-            LexErr::UnknownIntErr  => None,
-            LexErr::InvalidSymbol  => Some("this symbol does not occur in any token in LC-3 assembly".into()),
+            LexErr::DoesNotFitU16       => Some(format!("the range for a 16-bit unsigned integer is [{}, {}]", u16::MIN, u16::MAX).into()),
+            LexErr::DoesNotFitI16       => Some(format!("the range for a 16-bit signed integer is [{}, {}]", i16::MIN, i16::MAX).into()),
+            LexErr::InvalidHex          => Some("a hex literal starts with 'x' and consists of 0-9, A-F".into()),
+            LexErr::InvalidNumeric      => Some("a decimal literal only consists of digits 0-9".into()),
+            LexErr::InvalidHexEmpty     => Some("there should be hex digits (0-9, A-F) here".into()),
+            LexErr::InvalidNumericEmpty => Some("there should be digits (0-9) here".into()),
+            LexErr::UnknownIntErr       => None,
+            LexErr::InvalidReg          => Some("this must be R0-R7".into()),
+            LexErr::InvalidSymbol       => Some("this char does not occur in any token in LC-3 assembly".into()),
         }
     }
 }
 /// Helper that converts an int error kind to its corresponding LexErr, based on the provided inputs.
-fn convert_int_error(e: &std::num::IntErrorKind, invalid_fmt_err: LexErr, overflow_err: LexErr) -> LexErr {
+fn convert_int_error(
+    e: &std::num::IntErrorKind, 
+    invalid_digits_err: LexErr, 
+    empty_err: LexErr, 
+    overflow_err: LexErr, 
+    src: &str
+) -> LexErr {
     match e {
-        IntErrorKind::Empty        => invalid_fmt_err,
-        IntErrorKind::InvalidDigit => invalid_fmt_err,
+        IntErrorKind::Empty        => empty_err,
+        IntErrorKind::InvalidDigit if src == "-" => empty_err,
+        IntErrorKind::InvalidDigit => invalid_digits_err,
         IntErrorKind::PosOverflow  => overflow_err,
         IntErrorKind::NegOverflow  => overflow_err,
         IntErrorKind::Zero         => unreachable!("IntErrorKind::Zero should not be emitted in parsing u16"),
@@ -172,7 +197,7 @@ fn lex_unsigned_dec(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
     }
 
     string.parse::<u16>()
-        .map_err(|e| convert_int_error(e.kind(), LexErr::InvalidNumeric, LexErr::DoesNotFitU16))
+        .map_err(|e| convert_int_error(e.kind(), LexErr::InvalidNumeric, LexErr::InvalidNumericEmpty, LexErr::DoesNotFitU16, string))
 }
 
 fn lex_signed_dec(lx: &Lexer<'_, Token>) -> Result<i16, LexErr> {
@@ -182,7 +207,7 @@ fn lex_signed_dec(lx: &Lexer<'_, Token>) -> Result<i16, LexErr> {
     }
 
     string.parse::<i16>()
-        .map_err(|e| convert_int_error(e.kind(), LexErr::InvalidNumeric, LexErr::DoesNotFitI16))
+        .map_err(|e| convert_int_error(e.kind(), LexErr::InvalidNumeric, LexErr::InvalidNumericEmpty, LexErr::DoesNotFitI16, string))
 }
 fn lex_unsigned_hex(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
     let Some(hex) = lx.slice().strip_prefix(['X', 'x']) else {
@@ -190,7 +215,7 @@ fn lex_unsigned_hex(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
     };
 
     u16::from_str_radix(hex, 16)
-        .map_err(|e| convert_int_error(e.kind(), LexErr::InvalidNumeric, LexErr::DoesNotFitU16))
+        .map_err(|e| convert_int_error(e.kind(), LexErr::InvalidHex, LexErr::InvalidHexEmpty, LexErr::DoesNotFitU16, hex))
 }
 fn lex_signed_hex(lx: &Lexer<'_, Token>) -> Result<i16, LexErr> {
     let Some(hex) = lx.slice().strip_prefix(['X', 'x']) else {
@@ -198,13 +223,12 @@ fn lex_signed_hex(lx: &Lexer<'_, Token>) -> Result<i16, LexErr> {
     };
 
     i16::from_str_radix(hex, 16)
-        .map_err(|e| convert_int_error(e.kind(), LexErr::InvalidNumeric, LexErr::DoesNotFitI16))
+        .map_err(|e| convert_int_error(e.kind(), LexErr::InvalidHex, LexErr::InvalidHexEmpty, LexErr::DoesNotFitI16, hex))
 }
-fn lex_reg(lx: &Lexer<'_, Token>) -> u8 {
-    let regno = lx.slice()[1..].parse()
-        .unwrap_or_else(|_| unreachable!("lex_reg should only be called with register 0-7"));
-
-    regno
+fn lex_reg(lx: &Lexer<'_, Token>) -> Result<u8, LexErr> {
+    lx.slice()[1..].parse::<u8>().ok()
+        .filter(|&r| r < 8)
+        .ok_or(LexErr::InvalidReg)
 }
 fn lex_str_literal(lx: &Lexer<'_, Token>) -> String {
     // get the string inside quotes:
