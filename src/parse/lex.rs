@@ -132,13 +132,13 @@ pub enum LexErr {
     /// Hex literal (starting with x) doesn't have digits after it.
     InvalidHexEmpty,
     /// Numeric literal could not be parsed as a decimal literal because there are no digits in it (it's just # or #-)
-    InvalidNumericEmpty,
+    InvalidDecEmpty,
     /// Int parsing failed but the reason why is unknown
     UnknownIntErr,
     /// String literal is missing an end quotation mark.
-    UnclosedStrLiteral,
+    UnclosedStrLit,
     /// String literal is missing an end quotation mark.
-    StrLiteralTooBig,
+    StrLitTooBig,
     /// Token had the format R\d, but \d isn't 0-7.
     InvalidReg,
     /// A symbol was used which is not allowed in LC3 assembly files
@@ -148,17 +148,17 @@ pub enum LexErr {
 impl std::fmt::Display for LexErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LexErr::DoesNotFitU16       => f.write_str("numeric token does not fit 16-bit unsigned integer"),
-            LexErr::DoesNotFitI16       => f.write_str("numeric token does not fit 16-bit signed integer"),
-            LexErr::InvalidHex          => f.write_str("invalid hex literal"),
-            LexErr::InvalidNumeric      => f.write_str("invalid decimal literal"),
-            LexErr::InvalidHexEmpty     => f.write_str("invalid hex literal"),
-            LexErr::InvalidNumericEmpty => f.write_str("invalid decimal literal"),
-            LexErr::UnknownIntErr       => f.write_str("could not parse integer"),
-            LexErr::UnclosedStrLiteral  => f.write_str("unclosed string literal"),
-            LexErr::StrLiteralTooBig    => f.write_str("string literal is too large"),
-            LexErr::InvalidReg          => f.write_str("invalid register"),
-            LexErr::InvalidSymbol       => f.write_str("unrecognized symbol"),
+            LexErr::DoesNotFitU16   => f.write_str("numeric token does not fit 16-bit unsigned integer"),
+            LexErr::DoesNotFitI16   => f.write_str("numeric token does not fit 16-bit signed integer"),
+            LexErr::InvalidHex      => f.write_str("invalid hex literal"),
+            LexErr::InvalidNumeric  => f.write_str("invalid decimal literal"),
+            LexErr::InvalidHexEmpty => f.write_str("invalid hex literal"),
+            LexErr::InvalidDecEmpty => f.write_str("invalid decimal literal"),
+            LexErr::UnknownIntErr   => f.write_str("could not parse integer"),
+            LexErr::UnclosedStrLit  => f.write_str("unclosed string literal"),
+            LexErr::StrLitTooBig    => f.write_str("string literal is too large"),
+            LexErr::InvalidReg      => f.write_str("invalid register"),
+            LexErr::InvalidSymbol   => f.write_str("unrecognized symbol"),
         }
     }
 }
@@ -166,17 +166,17 @@ impl std::error::Error for LexErr {}
 impl crate::err::Error for LexErr {
     fn help(&self) -> Option<std::borrow::Cow<str>> {
         match self {
-            LexErr::DoesNotFitU16       => Some(format!("the range for a 16-bit unsigned integer is [{}, {}]", u16::MIN, u16::MAX).into()),
-            LexErr::DoesNotFitI16       => Some(format!("the range for a 16-bit signed integer is [{}, {}]", i16::MIN, i16::MAX).into()),
-            LexErr::InvalidHex          => Some("a hex literal starts with 'x' and consists of 0-9, A-F".into()),
-            LexErr::InvalidNumeric      => Some("a decimal literal only consists of digits 0-9".into()),
-            LexErr::InvalidHexEmpty     => Some("there should be hex digits (0-9, A-F) here".into()),
-            LexErr::InvalidNumericEmpty => Some("there should be digits (0-9) here".into()),
-            LexErr::UnknownIntErr       => None,
-            LexErr::UnclosedStrLiteral  => Some("add a quote to the end of the string literal".into()),
-            LexErr::StrLiteralTooBig    => Some(format!("string literals are limited to at most {} characters", u16::MAX).into()),
-            LexErr::InvalidReg          => Some("this must be R0-R7".into()),
-            LexErr::InvalidSymbol       => Some("this char does not occur in any token in LC-3 assembly".into()),
+            LexErr::DoesNotFitU16    => Some(format!("the range for a 16-bit unsigned integer is [{}, {}]", u16::MIN, u16::MAX).into()),
+            LexErr::DoesNotFitI16    => Some(format!("the range for a 16-bit signed integer is [{}, {}]", i16::MIN, i16::MAX).into()),
+            LexErr::InvalidHex       => Some("a hex literal starts with 'x' and consists of 0-9, A-F".into()),
+            LexErr::InvalidNumeric   => Some("a decimal literal only consists of digits 0-9".into()),
+            LexErr::InvalidHexEmpty  => Some("there should be hex digits (0-9, A-F) here".into()),
+            LexErr::InvalidDecEmpty  => Some("there should be digits (0-9) here".into()),
+            LexErr::UnknownIntErr    => None,
+            LexErr::UnclosedStrLit   => Some("add a quote to the end of the string literal".into()),
+            LexErr::StrLitTooBig     => Some(format!("string literals are limited to at most {} characters", u16::MAX).into()),
+            LexErr::InvalidReg       => Some("this must be R0-R7".into()),
+            LexErr::InvalidSymbol    => Some("this char does not occur in any token in LC-3 assembly".into()),
         }
     }
 }
@@ -205,7 +205,7 @@ fn lex_unsigned_dec(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
     }
 
     string.parse::<u16>()
-        .map_err(|e| convert_int_error(e.kind(), LexErr::InvalidNumeric, LexErr::InvalidNumericEmpty, LexErr::DoesNotFitU16, string))
+        .map_err(|e| convert_int_error(e.kind(), LexErr::InvalidNumeric, LexErr::InvalidDecEmpty, LexErr::DoesNotFitU16, string))
 }
 
 fn lex_signed_dec(lx: &Lexer<'_, Token>) -> Result<i16, LexErr> {
@@ -215,7 +215,7 @@ fn lex_signed_dec(lx: &Lexer<'_, Token>) -> Result<i16, LexErr> {
     }
 
     string.parse::<i16>()
-        .map_err(|e| convert_int_error(e.kind(), LexErr::InvalidNumeric, LexErr::InvalidNumericEmpty, LexErr::DoesNotFitI16, string))
+        .map_err(|e| convert_int_error(e.kind(), LexErr::InvalidNumeric, LexErr::InvalidDecEmpty, LexErr::DoesNotFitI16, string))
 }
 fn lex_unsigned_hex(lx: &Lexer<'_, Token>) -> Result<u16, LexErr> {
     let Some(hex) = lx.slice().strip_prefix(['X', 'x']) else {
@@ -254,7 +254,7 @@ fn lex_str_literal(lx: &mut Lexer<'_, Token>) -> Result<String, LexErr> {
         Some(len) => lx.bump(len + 1),
         None => {
             lx.bump(rem.len());
-            return Err(LexErr::UnclosedStrLiteral);
+            return Err(LexErr::UnclosedStrLit);
         }
     }
 
@@ -290,6 +290,6 @@ fn lex_str_literal(lx: &mut Lexer<'_, Token>) -> Result<String, LexErr> {
     
     match buf.len() <= usize::from(u16::MAX) {
         true  => Ok(buf),
-        false => Err(LexErr::StrLiteralTooBig),
+        false => Err(LexErr::StrLitTooBig),
     }
 }
