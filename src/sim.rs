@@ -142,7 +142,13 @@ pub struct Simulator {
     mcr: Arc<AtomicBool>,
 
     /// Any breakpoints to check for.
-    pub breakpoints: Vec<Breakpoint>
+    pub breakpoints: Vec<Breakpoint>,
+
+    /// Indicates whether the PC has been incremented in the fetch stage yet.
+    /// 
+    /// This is just for error handling purposes. It's used to compute
+    /// the PC of the instruction that caused an error. See [`Simulator::prefetch_pc`].
+    prefetch: bool
 }
 
 impl Simulator {
@@ -159,7 +165,8 @@ impl Simulator {
             io: None,
             alloca: Box::new([]),
             mcr: Arc::new(AtomicBool::new(false)),
-            breakpoints: vec![]
+            breakpoints: vec![],
+            prefetch: false
         }
     }
 
@@ -242,8 +249,20 @@ impl Simulator {
         Ok(())
     }
     /// Adds an offset to the PC.
-    pub fn offset_pc(&mut self, offset: i16) -> Result<(), SimErr> {
+    pub fn offset_pc(&mut self, offset: i16) {
         self.set_pc(Word::from(self.pc.wrapping_add_signed(offset)))
+            .unwrap_or_else(|_| unreachable!("set pc only errors on uninitialized address"))
+    }
+    /// Gets the value of the PC before fetch increments it.
+    /// 
+    /// This function provides the prefetch PC, which is
+    /// the location of the currently executing instruction in memory.
+    /// 
+    /// This is useful for error handling, as computing which instruction
+    /// in source is linked to the simulator's PC after an error requires
+    /// knowing whether the PC was prefetch or postfetch.
+    pub fn prefetch_pc(&self) -> u16 {
+        self.pc - (!self.prefetch) as u16
     }
 
     /// Checks whether address is in allocated user space
@@ -340,17 +359,19 @@ impl Simulator {
     }
     /// Perform one step through the simulator's execution.
     pub fn step_in(&mut self) -> Result<(), SimErr> {
+        self.prefetch = true;
         let word = self.mem.get(self.pc, self.mem_ctx(&self.io))?
             .assert_init(self.strict, SimErr::StrictPCMemUninit)?
             .get();
         let instr = SimInstr::decode(word)?;
 
-        self.offset_pc(1)?;
+        self.offset_pc(1);
+        self.prefetch = false;
 
         match instr {
             SimInstr::BR(cc, off)  => {
                 if cc & self.psr.cc() != 0 {
-                    self.offset_pc(off.get())?;
+                    self.offset_pc(off.get());
                 }
             },
             SimInstr::ADD(dr, sr1, sr2) => {

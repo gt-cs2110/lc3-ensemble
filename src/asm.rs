@@ -179,7 +179,7 @@ impl crate::err::Error for AsmErr {
     }
 }
 
-pub(crate) struct LineSymbolTable(Vec<(usize, Vec<u16>)>);
+struct LineSymbolTable(Vec<(usize, Vec<u16>)>);
 impl LineSymbolTable {
     fn new(lines: Vec<Option<u16>>) -> Self {
         let mut blocks = vec![];
@@ -228,14 +228,79 @@ impl LineSymbolTable {
             })
     }
 }
+
+/// Details some encoding information about the source.
+pub struct SourceInfo {
+    /// The source code.
+    src: String,
+    /// Where each line is in source code.
+    line_indices: Vec<usize>,
+    /// A mapping from each line with a statement in the source to an address.
+    line_table: LineSymbolTable
+}
+impl std::fmt::Debug for SourceInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use std::cell::Cell;
+
+        #[repr(transparent)]
+        struct Addr(u16);
+        impl std::fmt::Debug for Addr {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "x{:04X}", self.0)
+            }
+        }
+
+        struct Map<M>(Cell<Option<M>>);
+        impl<M> Map<M> {
+            fn new(m: M) -> Self {
+                Map(Cell::new(Some(m)))
+            }
+        }
+        impl<K: std::fmt::Debug, V: std::fmt::Debug, M: IntoIterator<Item=(K, V)>> std::fmt::Debug for Map<M> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_map()
+                    .entries(self.0.take().unwrap())
+                    .finish()
+            }
+        }
+
+        f.debug_struct("SourceInfo")
+            .field("line_indices", &self.line_indices)
+            .field("line_table", &Map::new({
+                self.line_table.iter()
+                    .map(|(i, v)| (i, Addr(v)))
+            }))
+            .finish_non_exhaustive()
+    }
+}
+impl SourceInfo {
+    /// Reads the entire source.
+    pub fn source(&self) -> &str {
+        &self.src
+    }
+
+    /// Gets the line span in source (if the line index is valid).
+    pub fn line_span(&self, line: usize) -> Option<Range<usize>> {
+        let &end = self.line_indices.get(line)?;
+        let start = self.line_indices.get(line - 1).map_or(0, |i| i + 1);
+
+        Some(start..end)
+    }
+
+    /// Reads a line from source.
+    pub fn read_line(&self, line: usize) -> Option<&str> {
+        Some(&self.src[self.line_span(line)?])
+    }
+}
+
 /// The symbol table created in the first assembler pass
 /// that maps each label to its corresponding address.
 pub struct SymbolTable {
     /// A mapping from label to address and span of the label.
     labels: HashMap<String, (u16, usize)>,
     
-    /// A mapping from each line with a statement from the source into an address.
-    pub(crate) lines: LineSymbolTable
+    /// Information about the source.
+    src_info: Option<SourceInfo>
 }
 
 impl SymbolTable {
@@ -334,7 +399,11 @@ impl SymbolTable {
         match lc {
             None => Ok(SymbolTable {
                 labels: labels.into_iter().map(|(k, (addr, span))| (k, (addr, span.start))).collect(),
-                lines: LineSymbolTable::new(lines)
+                src_info: src.map(|s| SourceInfo {
+                    src: s.to_string(),
+                    line_indices,
+                    line_table: LineSymbolTable::new(lines),
+                })
             }),
             Some(cur) => Err(AsmErr::new(AsmErrKind::UnclosedOrig, cur.block_orig)),
         }
@@ -347,12 +416,17 @@ impl SymbolTable {
 
     /// Gets the address of a given source line.
     pub fn get_line(&self, line: usize) -> Option<u16> {
-        self.lines.get(line)
+        self.src_info.as_ref()?.line_table.get(line)
     }
 
     /// Tries to get the source line from the address.
-    pub fn find_source(&self, addr: u16) -> Option<usize> {
-        self.lines.find(addr)
+    pub fn find_source_line(&self, addr: u16) -> Option<usize> {
+        self.src_info.as_ref()?.line_table.find(addr)
+    }
+
+    /// Reads the source info from this symbol table (if it exists).
+    pub fn source_info(&self) -> Option<&SourceInfo> {
+        self.src_info.as_ref()
     }
 }
 impl std::fmt::Debug for SymbolTable {
@@ -386,10 +460,7 @@ impl std::fmt::Debug for SymbolTable {
                 self.labels.iter()
                     .map(|(k, &(addr, start))| (k, (Addr(addr), start..(start + k.len()))))
             }))
-            .field("lines", &Map::new({
-                self.lines.iter()
-                    .map(|(i, v)| (i, Addr(v)))
-            }))
+            .field("source_info", &self.src_info)
             .finish()
     }
 }
@@ -573,6 +644,10 @@ impl ObjectFile {
 
     fn set_symbol_table(&mut self, sym: SymbolTable) {
         self.sym.replace(sym);
+    }
+    /// Gets the symbol table if it is present in the object file.
+    pub fn symbol_table(&self) -> Option<&SymbolTable> {
+        self.sym.as_ref()
     }
 }
 

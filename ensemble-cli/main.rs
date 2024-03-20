@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -99,8 +100,15 @@ fn cmd_run(obj_input: &Path, strict: bool) -> Result<(), ExitCode> {
     sim.strict = strict;
 
     sim.run()
-        .map_err(|e| ReportSimErr::new(&sim, e))
-        .map_err(|e| report_error(e, &SourceMetadata { name: "", src: Source::from(String::new()) }))?;
+        .map_err(|e| ReportSimErr::new(&sim, &obj, e))
+        .map_err(|e| report_error(e, &SourceMetadata {
+            name: file_name(obj_input).unwrap_or(""),
+            src: Source::from({
+                obj.symbol_table()
+                    .and_then(|sym| sym.source_info())
+                    .map_or_else(String::new, |s| s.source().to_string())
+                })
+        }))?;
     
     Err(ExitCode::FAILURE)
 }
@@ -144,7 +152,7 @@ fn report_error<E: lc3_ensemble::err::Error>(err: E, meta: &SourceMetadata) -> E
 struct ReportSimErr {
     kind: SimErr,
     pc: u16,
-    span: Option<ErrSpan>
+    span: Option<Range<usize>>
 }
 impl std::fmt::Display for ReportSimErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -154,7 +162,9 @@ impl std::fmt::Display for ReportSimErr {
 impl std::error::Error for ReportSimErr {}
 impl lc3_ensemble::err::Error for ReportSimErr {
     fn span(&self) -> Option<lc3_ensemble::err::ErrSpan> {
-        self.span.clone()
+        self.span
+            .clone()
+            .map(Into::into)
     }
 
     fn help(&self) -> Option<Cow<str>> {
@@ -162,11 +172,18 @@ impl lc3_ensemble::err::Error for ReportSimErr {
     }
 }
 impl ReportSimErr {
-    fn new(sim: &Simulator, kind: SimErr) -> Self {
-        let pc = sim.pc;
-        
+    fn new(sim: &Simulator, obj: &ObjectFile, kind: SimErr) -> Self {
+        let pc = sim.prefetch_pc();
+        let mut span = None;
+
+        'sym_ref: {
+            let Some(sym) = obj.symbol_table() else { break 'sym_ref };
+            let Some(pc_source) = sym.find_source_line(pc) else { break 'sym_ref };
+            let Some(src_info) = sym.source_info() else { break 'sym_ref };
+            span = src_info.line_span(pc_source);
+        }
         Self {
-            kind, pc, span: None
+            kind, pc, span
         }
     }
 }

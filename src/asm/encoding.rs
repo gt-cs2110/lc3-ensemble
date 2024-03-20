@@ -14,7 +14,8 @@ impl ObjectFile {
         // - 0x00: assembled bytecode block
         // - 0x01: label symbol table
         // - 0x02: line symbol table
-        // 
+        // - 0x03: source code information
+        //
         // Block 0x00 consists of:
         // - the identifier byte (1 byte)
         // - address where block starts (2 bytes)
@@ -35,6 +36,13 @@ impl ObjectFile {
         // - the source line number (8 bytes)
         // - length of contiguous block (2 bytes)
         // - the contiguous block (2n bytes)
+        // 
+        // Block 0x03 consists of:
+        // - the identifier byte (1 byte)
+        // - the length of the line indices table (8 bytes)
+        // - the line indices table (8n bytes)
+        // - the length of the source code (8 bytes)
+        // the source code (n bytes)
         
         let mut bytes = vec![];
         for (&addr, (data, orig_span)) in self.block_map.iter() {
@@ -62,13 +70,23 @@ impl ObjectFile {
                 bytes.extend_from_slice(label.as_bytes());
             }
 
-            for (lno, data) in sym.lines.0.iter() {
-                bytes.push(0x02);
-                bytes.extend(u64::to_le_bytes(*lno as u64));
-                bytes.extend(u16::to_le_bytes(data.len() as u16));
-                for &word in data {
-                    bytes.extend(u16::to_le_bytes(word));
+            if let Some(src) = &sym.src_info {
+                for (lno, data) in src.line_table.0.iter() {
+                    bytes.push(0x02);
+                    bytes.extend(u64::to_le_bytes(*lno as u64));
+                    bytes.extend(u16::to_le_bytes(data.len() as u16));
+                    for &word in data {
+                        bytes.extend(u16::to_le_bytes(word));
+                    }
                 }
+
+                bytes.push(0x03);
+                bytes.extend(u64::to_le_bytes(src.line_indices.len() as u64));
+                for &index in &src.line_indices {
+                    bytes.extend(u64::to_le_bytes(index as u64));
+                }
+                bytes.extend(u64::to_le_bytes(src.src.len() as u64));
+                bytes.extend_from_slice(src.src.as_bytes());
             }
         }
         bytes
@@ -76,9 +94,11 @@ impl ObjectFile {
 
     /// Reads a Vec<u8> back into object file information.
     pub fn read_bytes(mut vec: &[u8]) -> Option<ObjectFile> {
-        let mut block_map   = BTreeMap::new();
-        let mut label_table = HashMap::new();
-        let mut line_table  = vec![];
+        let mut block_map    = BTreeMap::new();
+        let mut label_table  = HashMap::new();
+        let mut line_table   = vec![];
+        let mut line_indices = None;
+        let mut src = None;
 
         while !vec.is_empty() {
             let Some((ident_byte, rest)) = vec.split_first() else { unreachable!() };
@@ -113,14 +133,33 @@ impl ObjectFile {
                     
                     line_table.push((lno, data));
                 },
+                0x03 => {
+                    let ref_li  = line_indices.get_or_insert(vec![]);
+                    let ref_src = src.get_or_insert(String::new());
+
+                    let li_len = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
+                    let li     = map_chunks::<_, 8>(take_slice(&mut vec, 8 * li_len)?, |arr| u64::from_le_bytes(arr) as usize);
+                    ref_li.extend(li);
+
+                    let src_len = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
+                    let obj_src = std::str::from_utf8(take_slice(&mut vec, src_len)?).ok()?;
+                    ref_src.push_str(obj_src);
+                }
                 _ => return None
             }
         }
 
-        let sym = match !label_table.is_empty() || !line_table.is_empty() {
-            true  => Some(SymbolTable {
+        let sym = match !label_table.is_empty() || !line_table.is_empty() || line_indices.is_some() {
+            true => Some(SymbolTable {
                 labels: label_table,
-                lines:  super::LineSymbolTable(line_table),
+                src_info: match !line_table.is_empty() || line_indices.is_some() {
+                    true  => Some(super::SourceInfo {
+                        src: src?, 
+                        line_indices: line_indices?,
+                        line_table: super::LineSymbolTable(line_table)
+                    }),
+                    false => None,
+                },
             }),
             false => None,
         };
