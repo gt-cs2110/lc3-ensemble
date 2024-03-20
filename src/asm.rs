@@ -10,6 +10,8 @@
 //! 
 //! [`Stmt`]: crate::ast::asm::Stmt
 
+mod encoding;
+
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
@@ -230,7 +232,7 @@ impl LineSymbolTable {
 /// that maps each label to its corresponding address.
 pub struct SymbolTable {
     /// A mapping from label to address and span of the label.
-    labels: HashMap<String, (u16, Span)>,
+    labels: HashMap<String, (u16, usize)>,
     
     /// A mapping from each line with a statement from the source into an address.
     pub(crate) lines: LineSymbolTable
@@ -330,7 +332,10 @@ impl SymbolTable {
         }
 
         match lc {
-            None      => Ok(SymbolTable { labels, lines: LineSymbolTable::new(lines) }),
+            None => Ok(SymbolTable {
+                labels: labels.into_iter().map(|(k, (addr, span))| (k, (addr, span.start))).collect(),
+                lines: LineSymbolTable::new(lines)
+            }),
             Some(cur) => Err(AsmErr::new(AsmErrKind::UnclosedOrig, cur.block_orig)),
         }
     }
@@ -379,7 +384,7 @@ impl std::fmt::Debug for SymbolTable {
         f.debug_struct("SymbolTable")
             .field("labels", &Map::new({
                 self.labels.iter()
-                    .map(|(k, (addr, span))| (k, (Addr(*addr), span)))
+                    .map(|(k, &(addr, start))| (k, (Addr(addr), start..(start + k.len()))))
             }))
             .field("lines", &Map::new({
                 self.lines.iter()
