@@ -281,8 +281,16 @@ impl SourceInfo {
 
     /// Gets the line span in source (if the line index is valid).
     pub fn line_span(&self, line: usize) -> Option<Range<usize>> {
-        let &end = self.line_indices.get(line)?;
-        let start = self.line_indices.get(line - 1).map_or(0, |i| i + 1);
+        let mut end   = *self.line_indices.get(line)?;
+        let mut start = self.line_indices.get(line - 1).map_or(0, |i| i + 1);
+        
+        // shift line span by trim
+        let line = &self.src[start..end];
+        let end_trimmed = line.trim_end();
+        end -= line.len() - end_trimmed.len();
+        
+        let line = end_trimmed;
+        start += line.len() - line.trim_start().len();
 
         Some(start..end)
     }

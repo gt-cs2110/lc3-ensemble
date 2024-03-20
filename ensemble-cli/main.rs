@@ -168,7 +168,21 @@ impl lc3_ensemble::err::Error for ReportSimErr {
     }
 
     fn help(&self) -> Option<Cow<str>> {
-        None
+        match self.kind {
+            SimErr::IllegalOpcode       => None,
+            SimErr::InvalidInstrFormat  => None,
+            SimErr::PrivilegeViolation  => Some("RTI can only be called in supervisor mode".into()),
+            SimErr::AccessViolation     => None,
+            SimErr::ProgramHalted       => Some("you should not see this error. uh oh.".into()),
+            SimErr::StrictRegSetUninit  => None,
+            SimErr::StrictMemSetUninit  => None,
+            SimErr::StrictIOSetUninit   => None,
+            SimErr::StrictJmpAddrUninit => None,
+            SimErr::StrictMemAddrUninit => None,
+            SimErr::StrictPCCurrUninit  => Some("ensure there is a HALT instruction after your code".into()),
+            SimErr::StrictPCNextUninit  => None,
+            SimErr::StrictPSRSetUninit  => None,
+        }
     }
 }
 impl ReportSimErr {
