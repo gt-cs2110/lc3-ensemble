@@ -64,7 +64,7 @@ fn cmd_assemble(input: &Path, output: &Path, debug: bool) -> Result<(), ExitCode
     let src = handle_read(input, std::fs::read_to_string)?;
 
     let meta = SourceMetadata {
-        name: input.to_string_lossy(),
+        name: input.file_name().map_or(Cow::from(""), |e| e.to_string_lossy()),
         src: Source::from(src.clone())
     };
     macro_rules! handle {
