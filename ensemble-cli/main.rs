@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
 use clap::{Parser, Subcommand};
-use lc3_ensemble::asm::assemble;
+use lc3_ensemble::asm::{assemble, assemble_debug};
 use lc3_ensemble::err::ErrSpan;
 use lc3_ensemble::parse::parse_ast;
 
@@ -17,16 +17,26 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Assemble an assembly source file into an object file.
     Assemble {
+        /// The input assembly source file.
         input: PathBuf,
+        /// The output object file.
         #[arg(short, long)]
-        output: Option<PathBuf>
+        output: Option<PathBuf>,
+        /// Whether to save debug symbols to the object file.
+        #[arg(short, long)]
+        debug_symbols: bool
     },
+    /// Runs an object file.
     Run {
         input: PathBuf,
     },
+    /// Runs an object file with some breakpoints.
     Debug {
         input: PathBuf,
+        #[arg(short, long)]
+        breakpoints: Vec<String>
     }
 }
 
@@ -39,9 +49,9 @@ fn main() -> ExitCode {
     let Args { cmd } = Args::parse();
 
     let result = match cmd {
-        Command::Assemble { input, output } => cmd_assemble(&input, output.as_deref().unwrap_or(&input)),
+        Command::Assemble { input, output, debug_symbols } => cmd_assemble(&input, output.as_deref().unwrap_or(&input), debug_symbols),
         Command::Run { input } => cmd_run(&input),
-        Command::Debug { input } => cmd_debug(&input),
+        Command::Debug { input, breakpoints } => cmd_debug(&input, &breakpoints),
     };
 
     match result {
@@ -50,7 +60,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn cmd_assemble(input: &Path, output: &Path) -> Result<(), ExitCode> {
+fn cmd_assemble(input: &Path, output: &Path, debug: bool) -> Result<(), ExitCode> {
     let src = handle_read(input, std::fs::read_to_string)?;
 
     let meta = SourceMetadata {
@@ -70,14 +80,17 @@ fn cmd_assemble(input: &Path, output: &Path) -> Result<(), ExitCode> {
     }
 
     let ast = handle!(parse_ast(&src));
-    let obj = handle!(assemble(ast));
+    let obj = match debug {
+        false => handle!(assemble(ast)),
+        true  => handle!(assemble_debug(ast, &src)),
+    };
     
     Ok(())
 }
 fn cmd_run(input: &Path) -> Result<(), ExitCode> {
     Err(ExitCode::FAILURE)
 }
-fn cmd_debug(input: &Path) -> Result<(), ExitCode> {
+fn cmd_debug(input: &Path, breakpoints: &[String]) -> Result<(), ExitCode> {
     Err(ExitCode::FAILURE)
 }
 

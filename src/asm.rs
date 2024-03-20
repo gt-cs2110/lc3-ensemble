@@ -26,10 +26,17 @@ use crate::sim::mem::Word;
 /// Assembles a assembly source code AST into an object file.
 pub fn assemble(ast: Vec<Stmt>) -> Result<ObjectFile, AsmErr> {
     let sym = SymbolTable::new(&ast, None)?;
-    create_obj_file(ast, sym)
+    create_obj_file(ast, sym, false)
+}
+/// Assembles a assembly source code AST into an object file.
+/// 
+/// This also registers debug symbols to the object file.
+pub fn assemble_debug(ast: Vec<Stmt>, src: &str) -> Result<ObjectFile, AsmErr> {
+    let sym = SymbolTable::new(&ast, Some(src))?;
+    create_obj_file(ast, sym, true)
 }
 
-fn create_obj_file(ast: Vec<Stmt>, sym: SymbolTable) -> Result<ObjectFile, AsmErr> {
+fn create_obj_file(ast: Vec<Stmt>, sym: SymbolTable, debug: bool) -> Result<ObjectFile, AsmErr> {
     let mut obj = ObjectFile::new();
 
     // PASS 2
@@ -73,6 +80,9 @@ fn create_obj_file(ast: Vec<Stmt>, sym: SymbolTable) -> Result<ObjectFile, AsmEr
         }
     }
 
+    if debug {
+        obj.set_symbol_table(sym);
+    }
     Ok(obj)
 }
 
@@ -503,13 +513,17 @@ pub struct ObjectFile {
     /// 
     /// Note that the length of a block should fit in a `u16`, so the
     /// block can be a maximum of 65535 words.
-    block_map: BTreeMap<u16, (Vec<Word>, Span)>
+    block_map: BTreeMap<u16, (Vec<Word>, Span)>,
+
+    /// Debug symbols.
+    sym: Option<SymbolTable>
 }
 impl ObjectFile {
     /// Creates a new, empty [`ObjectFile`].
     pub fn new() -> Self {
         ObjectFile {
-            block_map: BTreeMap::new()
+            block_map: BTreeMap::new(),
+            sym: None
         }
     }
 
@@ -550,6 +564,10 @@ impl ObjectFile {
     /// Returns whether there are blocks in this object file.
     pub fn is_empty(&self) -> bool {
         self.block_map.is_empty()
+    }
+
+    fn set_symbol_table(&mut self, sym: SymbolTable) {
+        self.sym.replace(sym);
     }
 }
 
