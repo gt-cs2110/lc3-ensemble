@@ -343,7 +343,7 @@ impl SimInstr {
                 let vect = word.slice(0..8).interpret();
                 Ok(Self::TRAP(vect))
             },
-            _ => Err(SimErr::InvalidOpcode)
+            _ => Err(SimErr::IllegalOpcode)
         }
     }
 }

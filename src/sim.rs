@@ -27,7 +27,7 @@ use self::mem::{AssertInit as _, Mem, MemAccessCtx, RegFile, Word};
 #[derive(Debug)]
 pub enum SimErr {
     /// Word was decoded, but the opcode was invalid.
-    InvalidOpcode,
+    IllegalOpcode,
     /// Word was decoded, and the opcode is recognized,
     /// but the instruction's format is invalid.
     InvalidInstrFormat,
@@ -67,7 +67,25 @@ pub enum SimErr {
     /// The PSR was loaded with a partially uninitialized value (by RTI).
     StrictPSRSetUninit,
 }
-
+impl std::fmt::Display for SimErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SimErr::IllegalOpcode       => f.write_str("simulator executed illegal opcode"),
+            SimErr::InvalidInstrFormat  => f.write_str("simulator executed invalid instruction"),
+            SimErr::PrivilegeViolation  => f.write_str("privilege violation"),
+            SimErr::AccessViolation     => f.write_str("access violation"),
+            SimErr::ProgramHalted       => f.write_str("program halted"),
+            SimErr::StrictRegSetUninit  => f.write_str("register was set to uninitialized value (strict mode)"),
+            SimErr::StrictMemSetUninit  => f.write_str("tried to write an uninitialized value to memory (strict mode)"),
+            SimErr::StrictIOSetUninit   => f.write_str("tried to write an uninitialized value to memory-mapped IO (strict mode)"),
+            SimErr::StrictJmpAddrUninit => f.write_str("PC was set to uninitialized value (strict mode)"),
+            SimErr::StrictMemAddrUninit => f.write_str("tried to access memory with an uninitialized address (strict mode)"),
+            SimErr::StrictPCMemUninit   => f.write_str("cannot execute uninitialized value (strict mode)"),
+            SimErr::StrictPSRSetUninit  => f.write_str("tried to set the PSR to an uninitialized value (strict mode)"),
+        }
+    }
+}
+impl std::error::Error for SimErr {}
 /// Executes assembled code.
 #[derive(Debug)]
 pub struct Simulator {
