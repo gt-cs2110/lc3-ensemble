@@ -25,7 +25,11 @@ use crate::sim::mem::Word;
 
 /// Assembles a assembly source code AST into an object file.
 pub fn assemble(ast: Vec<Stmt>) -> Result<ObjectFile, AsmErr> {
-    let sym = SymbolTable::new(&ast)?;
+    let sym = SymbolTable::new(&ast, None)?;
+    create_obj_file(ast, sym)
+}
+
+fn create_obj_file(ast: Vec<Stmt>, sym: SymbolTable) -> Result<ObjectFile, AsmErr> {
     let mut obj = ObjectFile::new();
 
     // PASS 2
@@ -71,6 +75,7 @@ pub fn assemble(ast: Vec<Stmt>) -> Result<ObjectFile, AsmErr> {
 
     Ok(obj)
 }
+
 /// Kinds of errors that can occur from assembling given assembly code.
 /// 
 /// Error with span information is [`AsmErr`].
@@ -162,18 +167,71 @@ impl crate::err::Error for AsmErr {
     }
 }
 
+pub(crate) struct LineSymbolTable(Vec<(usize, Vec<u16>)>);
+impl LineSymbolTable {
+    fn new(lines: Vec<Option<u16>>) -> Self {
+        let mut blocks = vec![];
+        let mut current = None;
+        for (i, line) in lines.into_iter().enumerate() {
+            match line {
+                Some(addr) => current.get_or_insert_with(Vec::new).push(addr),
+                None => if let Some(bl) = current.take() {
+                    blocks.push((i - bl.len(), bl));
+                },
+            }
+        }
+
+        Self(blocks)
+    }
+    fn get(&self, line: usize) -> Option<u16> {
+        use std::cmp::Ordering;
+
+        let index = self.0.binary_search_by(|(start, words)| {
+            match *start <= line {
+                false => Ordering::Less,
+                true  => match line < *start + words.len() {
+                    true  => Ordering::Equal,
+                    false => Ordering::Greater,
+                },
+            }
+        }).ok()?;
+
+        let (start, block) = &self.0[index];
+        block.get(line - *start).copied()
+    }
+    fn find(&self, addr: u16) -> Option<usize> {
+        self.0.iter()
+            .find_map(|(start, words)| {
+                words.binary_search(&addr)
+                    .ok()
+                    .map(|o| start + o)
+            })
+    }
+    fn iter(&self) -> impl Iterator<Item=(usize, u16)> + '_ {
+        self.0.iter()
+            .flat_map(|(i, words)| {
+                words.iter()
+                    .enumerate()
+                    .map(move |(off, &addr)| (i + off, addr))
+            })
+    }
+}
 /// The symbol table created in the first assembler pass
 /// that maps each label to its corresponding address.
-#[derive(PartialEq, Eq)]
 pub struct SymbolTable {
     /// A mapping from label to address and span of the label.
-    labels: HashMap<String, (u16, Span)>
+    labels: HashMap<String, (u16, Span)>,
+    
+    /// A mapping from each line with a statement from the source into an address.
+    pub(crate) lines: LineSymbolTable
 }
 
 impl SymbolTable {
     /// Creates a new symbol table (performing the first assembler pass)
     /// by reading through the statements and computing label addresses.
-    pub fn new(stmts: &[Stmt]) -> Result<Self, AsmErr> {
+    /// 
+    /// If a src argument is provided, this also computes the mapping from source lines to word location.
+    pub fn new(stmts: &[Stmt], src: Option<&str>) -> Result<Self, AsmErr> {
         struct Cursor {
             // The current location counter.
             lc: u16,
@@ -196,8 +254,16 @@ impl SymbolTable {
             }
         }
 
+        // Index where each new line appears.
+        let line_indices: Vec<_> = src.unwrap_or("")
+            .match_indices('\n')
+            .map(|(i, _)| i)
+            .collect();
+
         let mut lc: Option<Cursor> = None;
         let mut labels: HashMap<String, (u16, Span)> = HashMap::new();
+        let mut lines = vec![];
+        lines.resize(line_indices.len() + 1, None);
 
         for stmt in stmts {
             // Add labels if they exist
@@ -234,8 +300,16 @@ impl SymbolTable {
                 _ => {}
             };
 
-            // Shift the location counter:
+            // Shift the location counter, and link the source line with the LC.
             if let Some(cur) = &mut lc {
+                if src.is_some() {
+                    // Calculate line index and put it in self.lines.
+                    if !matches!(stmt.nucleus, StmtKind::Directive(Directive::Orig(_) | Directive::End)) {
+                        let line_index = line_indices.partition_point(|&start| start < stmt.span.start);
+                        lines[line_index].replace(cur.lc);
+                    }
+                }
+
                 let success = match &stmt.nucleus {
                     StmtKind::Instr(_)     => cur.shift(1),
                     StmtKind::Directive(d) => cur.shift(d.word_len()),
@@ -246,18 +320,31 @@ impl SymbolTable {
         }
 
         match lc {
-            None      => Ok(SymbolTable { labels }),
+            None      => Ok(SymbolTable { labels, lines: LineSymbolTable::new(lines) }),
             Some(cur) => Err(AsmErr::new(AsmErrKind::UnclosedOrig, cur.block_orig)),
         }
     }
 
     /// Gets the address of a given label (if it exists).
-    pub fn get(&self, label: &str) -> Option<u16> {
+    pub fn get_label(&self, label: &str) -> Option<u16> {
         self.labels.get(&label.to_uppercase()).map(|&(addr, _)| addr)
+    }
+
+    /// Gets the address of a given source line.
+    pub fn get_line(&self, line: usize) -> Option<u16> {
+        self.lines.get(line)
+    }
+
+    /// Tries to get the source line from the address.
+    pub fn find_source(&self, addr: u16) -> Option<usize> {
+        self.lines.find(addr)
     }
 }
 impl std::fmt::Debug for SymbolTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use std::cell::Cell;
+
+        #[repr(transparent)]
         struct Addr(u16);
         impl std::fmt::Debug for Addr {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -265,12 +352,29 @@ impl std::fmt::Debug for SymbolTable {
             }
         }
 
-        f.write_str("SymbolTable ")?;
-        f.debug_map()
-            .entries({
+        struct Map<M>(Cell<Option<M>>);
+        impl<M> Map<M> {
+            fn new(m: M) -> Self {
+                Map(Cell::new(Some(m)))
+            }
+        }
+        impl<K: std::fmt::Debug, V: std::fmt::Debug, M: IntoIterator<Item=(K, V)>> std::fmt::Debug for Map<M> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_map()
+                    .entries(self.0.take().unwrap())
+                    .finish()
+            }
+        }
+
+        f.debug_struct("SymbolTable")
+            .field("labels", &Map::new({
                 self.labels.iter()
-                    .map(|(k, &(addr, ref span))| (k, (Addr(addr), span)))
-            })
+                    .map(|(k, (addr, span))| (k, (Addr(*addr), span)))
+            }))
+            .field("lines", &Map::new({
+                self.lines.iter()
+                    .map(|(i, v)| (i, Addr(v)))
+            }))
             .finish()
     }
 }
@@ -281,7 +385,7 @@ fn replace_pc_offset<const N: u32>(off: PCOffset<i16, N>, lc: u16, sym: &SymbolT
     match off {
         PCOffset::Offset(off) => Ok(off),
         PCOffset::Label(label) => {
-            let Some(loc) = sym.get(&label.name) else { return Err(AsmErr::new(AsmErrKind::CouldNotFindLabel, label.span())) };
+            let Some(loc) = sym.get_label(&label.name) else { return Err(AsmErr::new(AsmErrKind::CouldNotFindLabel, label.span())) };
             IOffset::new(loc.wrapping_sub(lc) as i16)
                 .map_err(|e| AsmErr::new(AsmErrKind::OffsetNewErr(e), label.span()))
         },
@@ -343,7 +447,7 @@ impl Directive {
                 let off = match pc_offset {
                     PCOffset::Offset(o) => o.get(),
                     PCOffset::Label(l)  => {
-                        labels.get(&l.name)
+                        labels.get_label(&l.name)
                             .ok_or_else(|| AsmErr::new(AsmErrKind::CouldNotFindLabel, l.span()))?
                     },
                 };
