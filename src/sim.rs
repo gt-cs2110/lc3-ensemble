@@ -139,7 +139,7 @@ pub struct Simulator {
 
     /// Machine control.
     /// If unset, the program stops.
-    pub mcr: Arc<AtomicBool>,
+    mcr: Arc<AtomicBool>,
 
     /// Any breakpoints to check for.
     pub breakpoints: Vec<Breakpoint>
@@ -228,6 +228,11 @@ impl Simulator {
     /// Gets a reference to the PSR.
     pub fn psr(&self) -> &PSR {
         &self.psr
+    }
+
+    /// Gets a reference to the MCR.
+    pub fn mcr(&self) -> &Arc<AtomicBool> {
+        &self.mcr
     }
 
     /// Sets the PC to the given address, raising any errors that occur.
