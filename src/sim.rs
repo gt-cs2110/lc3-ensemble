@@ -63,7 +63,9 @@ pub enum SimErr {
     /// Address to read from memory is coming from an uninitialized value.
     StrictMemAddrUninit,
     /// PC is pointing to an uninitialized value.
-    StrictPCMemUninit,
+    StrictPCCurrUninit,
+    /// PC was set to an address that has an uninitialized value and will read from it next cycle.
+    StrictPCNextUninit,
     /// The PSR was loaded with a partially uninitialized value (by RTI).
     StrictPSRSetUninit,
 }
@@ -78,9 +80,10 @@ impl std::fmt::Display for SimErr {
             SimErr::StrictRegSetUninit  => f.write_str("register was set to uninitialized value (strict mode)"),
             SimErr::StrictMemSetUninit  => f.write_str("tried to write an uninitialized value to memory (strict mode)"),
             SimErr::StrictIOSetUninit   => f.write_str("tried to write an uninitialized value to memory-mapped IO (strict mode)"),
-            SimErr::StrictJmpAddrUninit => f.write_str("PC was set to uninitialized value (strict mode)"),
+            SimErr::StrictJmpAddrUninit => f.write_str("PC address was set to uninitialized value (strict mode)"),
             SimErr::StrictMemAddrUninit => f.write_str("tried to access memory with an uninitialized address (strict mode)"),
-            SimErr::StrictPCMemUninit   => f.write_str("cannot execute uninitialized value (strict mode)"),
+            SimErr::StrictPCCurrUninit  => f.write_str("PC is pointing to uninitialized value (strict mode)"),
+            SimErr::StrictPCNextUninit  => f.write_str("PC will point to uninitialized value when this instruction executes (strict mode)"),
             SimErr::StrictPSRSetUninit  => f.write_str("tried to set the PSR to an uninitialized value (strict mode)"),
         }
     }
@@ -243,15 +246,28 @@ impl Simulator {
     }
 
     /// Sets the PC to the given address, raising any errors that occur.
-    pub fn set_pc(&mut self, addr_word: Word) -> Result<(), SimErr> {
+    /// 
+    /// The `st_check_mem` parameter indicates whether the data at the PC should be verified in strict mode.
+    /// This should be enabled in most circumstances (e.g., when it is set with JMP or JSR).
+    /// 
+    /// Notably, one time where the parameter is not set is when the PC is incremented every cycle, 
+    /// because it is not known whether that data will ever be read by the PC.
+    pub fn set_pc(&mut self, addr_word: Word, st_check_mem: bool) -> Result<(), SimErr> {
         let addr = addr_word.assert_init(self.strict, SimErr::StrictJmpAddrUninit)?.get();
+        if self.strict && st_check_mem {
+            // Check next memory value is initialized:
+            if !self.mem.get(addr, self.mem_ctx(&self.io))?.is_init() {
+                return Err(SimErr::StrictPCNextUninit);
+            }
+        }
         self.pc = addr;
         Ok(())
     }
     /// Adds an offset to the PC.
-    pub fn offset_pc(&mut self, offset: i16) {
-        self.set_pc(Word::from(self.pc.wrapping_add_signed(offset)))
-            .unwrap_or_else(|_| unreachable!("set pc only errors on uninitialized address"))
+    /// 
+    /// See [`Simulator::set_pc`] for details about `st_check_mem`.
+    pub fn offset_pc(&mut self, offset: i16, st_check_mem: bool) -> Result<(), SimErr> {
+        self.set_pc(Word::from(self.pc.wrapping_add_signed(offset)), st_check_mem)
     }
     /// Gets the value of the PC before fetch increments it.
     /// 
@@ -328,7 +344,7 @@ impl Simulator {
 
         self.sr_entered += 1;
         let addr = self.mem.get(vect, self.mem_ctx(&self.io))?;
-        self.set_pc(addr)
+        self.set_pc(addr, true)
     }
 
     /// Execute the program.
@@ -361,17 +377,17 @@ impl Simulator {
     pub fn step_in(&mut self) -> Result<(), SimErr> {
         self.prefetch = true;
         let word = self.mem.get(self.pc, self.mem_ctx(&self.io))?
-            .assert_init(self.strict, SimErr::StrictPCMemUninit)?
+            .assert_init(self.strict, SimErr::StrictPCCurrUninit)?
             .get();
         let instr = SimInstr::decode(word)?;
 
-        self.offset_pc(1);
+        self.offset_pc(1, false)?;
         self.prefetch = false;
 
         match instr {
             SimInstr::BR(cc, off)  => {
                 if cc & self.psr.cc() != 0 {
-                    self.offset_pc(off.get());
+                    self.offset_pc(off.get(), true)?;
                 }
             },
             SimInstr::ADD(dr, sr1, sr2) => {
@@ -411,7 +427,7 @@ impl Simulator {
                     ImmOrReg::Reg(br)  => self.reg_file[br],
                 };
                 self.sr_entered += 1;
-                self.set_pc(addr)?;
+                self.set_pc(addr, true)?;
             },
             SimInstr::AND(dr, sr1, sr2) => {
                 let val1 = self.reg_file[sr1];
@@ -512,7 +528,7 @@ impl Simulator {
                     self.sr_entered = self.sr_entered.saturating_sub(1);
                 }
                 let addr = self.reg_file[br];
-                self.set_pc(addr)?;
+                self.set_pc(addr, true)?;
             },
             SimInstr::LEA(dr, off) => {
                 let ea = self.pc.wrapping_add_signed(off.get());
