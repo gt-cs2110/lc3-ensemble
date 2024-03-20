@@ -36,12 +36,6 @@ enum Command {
         #[arg(short, long)]
         strict: bool
     },
-    /// Runs an object file with some breakpoints.
-    Debug {
-        input: PathBuf,
-        #[arg(short, long)]
-        breakpoints: Vec<String>
-    }
 }
 
 struct SourceMetadata<'fp> {
@@ -60,8 +54,7 @@ fn main() -> ExitCode {
                 no_debug_symbols
             )
         },
-        Command::Run { input, strict } => cmd_run(&input, strict),
-        Command::Debug { input, breakpoints } => cmd_debug(&input, &breakpoints),
+        Command::Run { input, strict } => cmd_run(&input, strict)
     };
 
     match result {
@@ -110,10 +103,6 @@ fn cmd_run(obj_input: &Path, strict: bool) -> Result<(), ExitCode> {
                 })
         }))?;
     
-    Err(ExitCode::FAILURE)
-}
-
-fn cmd_debug(input: &Path, breakpoints: &[String]) -> Result<(), ExitCode> {
     Err(ExitCode::FAILURE)
 }
 
