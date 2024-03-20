@@ -1,13 +1,13 @@
 use std::borrow::Cow;
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
 use clap::{Parser, Subcommand};
-use lc3_ensemble::asm::{assemble, assemble_debug};
+use lc3_ensemble::asm::{assemble, assemble_debug, ObjectFile};
 use lc3_ensemble::err::ErrSpan;
 use lc3_ensemble::parse::parse_ast;
+use lc3_ensemble::sim::{SimErr, Simulator};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -25,12 +25,15 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
         /// Whether to save debug symbols to the object file.
-        #[arg(short, long)]
-        debug_symbols: bool
+        #[arg(short = 'N', long)]
+        no_debug_symbols: bool
     },
     /// Runs an object file.
     Run {
         input: PathBuf,
+
+        #[arg(short, long)]
+        strict: bool
     },
     /// Runs an object file with some breakpoints.
     Debug {
@@ -41,7 +44,7 @@ enum Command {
 }
 
 struct SourceMetadata<'fp> {
-    name: Cow<'fp, str>,
+    name: &'fp str,
     src: Source<String>
 }
 
@@ -49,8 +52,14 @@ fn main() -> ExitCode {
     let Args { cmd } = Args::parse();
 
     let result = match cmd {
-        Command::Assemble { input, output, debug_symbols } => cmd_assemble(&input, output.as_deref().unwrap_or(&input), debug_symbols),
-        Command::Run { input } => cmd_run(&input),
+        Command::Assemble { input, output, no_debug_symbols } => {
+            cmd_assemble(
+                &input, 
+                output.as_deref().unwrap_or(&input.with_extension("obj")), 
+                no_debug_symbols
+            )
+        },
+        Command::Run { input, strict } => cmd_run(&input, strict),
         Command::Debug { input, breakpoints } => cmd_debug(&input, &breakpoints),
     };
 
@@ -60,123 +69,188 @@ fn main() -> ExitCode {
     }
 }
 
-fn cmd_assemble(input: &Path, output: &Path, debug: bool) -> Result<(), ExitCode> {
+fn cmd_assemble(input: &Path, output: &Path, no_debug: bool) -> Result<(), ExitCode> {
     let src = handle_read(input, std::fs::read_to_string)?;
 
     let meta = SourceMetadata {
-        name: input.file_name().map_or(Cow::from(""), |e| e.to_string_lossy()),
+        name: file_name(input).unwrap_or(""),
         src: Source::from(src.clone())
     };
-    macro_rules! handle {
-        ($e:expr) => {
-            match $e {
-                Ok(t) => t,
-                Err(e) => {
-                    report_error(e, &meta).unwrap();
-                    return Err(ExitCode::FAILURE);
-                }
-            }
-        }
-    }
 
-    let ast = handle!(parse_ast(&src));
-    let obj = match debug {
-        false => handle!(assemble(ast)),
-        true  => handle!(assemble_debug(ast, &src)),
-    };
-    
-    Ok(())
+    let ast = parse_ast(&src)
+        .map_err(|e| report_error(e, &meta))?;
+    let obj = match no_debug {
+        false => assemble_debug(ast, &src),
+        true  => assemble(ast),
+    }.map_err(|e| report_error(e, &meta))?;
+
+    std::fs::write(output, obj.write_bytes())
+        .map_err(|e| report_simple(output, e))
 }
-fn cmd_run(input: &Path) -> Result<(), ExitCode> {
+
+fn cmd_run(obj_input: &Path, strict: bool) -> Result<(), ExitCode> {
+    let bytes = handle_read(obj_input, std::fs::read)?;
+    let obj = ObjectFile::read_bytes(&bytes)
+        .ok_or_else(|| report_simple(obj_input, "could not parse object file"))?;
+
+    let mut sim = Simulator::new();
+    sim.load_os();
+    sim.load_obj_file(&obj);
+    sim.strict = strict;
+
+    sim.run()
+        .map_err(|e| ReportSimErr::new(&sim, e))
+        .map_err(|e| report_error(e, &SourceMetadata { name: "", src: Source::from(String::new()) }))?;
+    
     Err(ExitCode::FAILURE)
 }
+
 fn cmd_debug(input: &Path, breakpoints: &[String]) -> Result<(), ExitCode> {
     Err(ExitCode::FAILURE)
 }
 
 fn handle_read<'p, T>(input: &'p Path, read: impl FnOnce(&'p Path) -> std::io::Result<T>) -> Result<T, ExitCode> {
-    read(input)
-        .map_err(|e| {
-            Report::<Range<_>>::build(ReportKind::Error, (), 0)
-                .with_message(format!("{}: {e}", input.display()))
-                .finish()
-                .eprint(Source::from(""))
-                .unwrap();
-            
-            ExitCode::FAILURE
-        })
+    read(input).map_err(|e| report_simple(input, e))
 }
-fn report_error<E: lc3_ensemble::err::Error>(err: E, meta: &SourceMetadata) -> std::io::Result<()> {
-    let mut colors = ColorGenerator::new();
 
-    match err.span() {
-        Some(span) => {
-            let mut report = Report::build(ReportKind::Error, &*meta.name, span.first().start)
-                .with_message(&err);
+fn file_name(fp: &Path) -> Option<&str> {
+    fp.file_name()?.to_str()
+}
+fn report_simple(fp: &Path, err: impl std::fmt::Display) -> ExitCode {
+    ReportContents {
+        err: &err,
+        filename: file_name(fp),
+        source: None,
+        span: None,
+        help: None,
+        msg_includes_fname: true
+    }.report()
+}
+fn report_error<E: lc3_ensemble::err::Error>(err: E, meta: &SourceMetadata) -> ExitCode {
+    let span = err.span();
+    let help = err.help();
 
-            match span {
-                ErrSpan::One(r) => {
-                    report = report.with_label({
-                        let mut label = Label::new((&*meta.name, r))
-                            .with_color(colors.next());
-                        
-                        if let Some(help) = err.help() {
-                            label = label.with_message(help);
-                        }
-    
-                        label
-                    });
-                },
-                ErrSpan::Two([r0, r1]) => {
-                    report = report
-                        .with_label({
-                            Label::new((&*meta.name, r0))
-                                    .with_color(colors.next())
-                                    .with_message("")
-                        })
-                        .with_label({
-                            Label::new((&*meta.name, r1))
-                                    .with_color(colors.next())
-                                    .with_message("")
-                        });
+    ReportContents {
+        err: &err,
+        filename: Some(meta.name),
+        source: Some(meta.src.clone()),
+        span,
+        help: help.as_deref(),
+        msg_includes_fname: false,
+    }.report()
+}
 
-                    if let Some(help) = err.help() {
-                        report.set_help(help);
-                    }
-                },
-                ErrSpan::Many(mr) => {
-                    report = report.with_labels({
-                        mr.into_iter()
-                            .map(|s| {
-                                Label::new((&*meta.name, s.clone()))
-                                    .with_color(colors.next())
-                                    .with_message("")
-                            })
-                    });
+#[derive(Debug)]
+struct ReportSimErr {
+    kind: SimErr,
+    pc: u16,
+    span: Option<ErrSpan>
+}
+impl std::fmt::Display for ReportSimErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} [PC = x{:04X}]", self.kind, self.pc)
+    }
+}
+impl std::error::Error for ReportSimErr {}
+impl lc3_ensemble::err::Error for ReportSimErr {
+    fn span(&self) -> Option<lc3_ensemble::err::ErrSpan> {
+        self.span.clone()
+    }
 
-                    if let Some(help) = err.help() {
-                        report.set_help(help);
-                    }
-                },
+    fn help(&self) -> Option<Cow<str>> {
+        None
+    }
+}
+impl ReportSimErr {
+    fn new(sim: &Simulator, kind: SimErr) -> Self {
+        let pc = sim.pc;
+        
+        Self {
+            kind, pc, span: None
+        }
+    }
+}
+
+struct ReportContents<'c, E> {
+    err: &'c E,
+    filename: Option<&'c str>,
+    source: Option<Source<String>>,
+    span: Option<ErrSpan>,
+    help: Option<&'c str>,
+    msg_includes_fname: bool
+}
+impl<E: std::fmt::Display> ReportContents<'_, E> {
+    fn report(self) -> ExitCode {
+        let mut colors = ColorGenerator::new();
+
+        let msg = if self.msg_includes_fname {
+            if let Some(fname) = self.filename {
+                format!("{}: {}", fname, self.err)
+            } else {
+                self.err.to_string()
             }
-            
-            report
-                .finish()
-                .eprint((&*meta.name, meta.src.clone()))
-        },
-        None => {
-            let mut report = Report::build(ReportKind::Error, &*meta.name, 0)
-                .with_message(&err);
-            
-            if let Some(help) = err.help() {
-                report = report
-                    .with_label(Label::new((&*meta.name, 0..0)))
-                    .with_help(help)
-            };
+        } else {
+            self.err.to_string()
+        };
+        let fname = self.filename.unwrap_or("source");
+        let offset = self.span.as_ref().map_or(0, |e| e.first().start);
+        
+        let mut report = Report::build(ReportKind::Error, fname, offset).with_message(msg);
+        match self.span {
+            Some(ErrSpan::One(r)) => {
+                report.add_label({
+                    let mut label = Label::new((fname, r))
+                        .with_color(colors.next());
+                    
+                    if let Some(help) = self.help {
+                        label = label.with_message(help);
+                    }
 
-            report
-                .finish()
-                .eprint((&*meta.name, Source::from("")))
-        },
+                    label
+                })
+            },
+            Some(ErrSpan::Two([r0, r1])) => {
+                report.add_label({
+                    Label::new((fname, r0))
+                            .with_color(colors.next())
+                            .with_message("")
+                });
+                report.add_label({
+                    Label::new((fname, r1))
+                            .with_color(colors.next())
+                            .with_message("")
+                });
+
+                if let Some(help) = self.help {
+                    report.set_help(help);
+                }
+            },
+            Some(ErrSpan::Many(mr)) => {
+                report.add_labels({
+                    mr.into_iter()
+                        .map(|s| {
+                            Label::new((fname, s.clone()))
+                                .with_color(colors.next())
+                                .with_message("")
+                        })
+                });
+
+                if let Some(help) = self.help {
+                    report.set_help(help);
+                }
+            },
+            None => {
+                if let Some(help) = self.help {
+                    report.add_label(Label::new((fname, 0..0)));
+                    report.set_help(help);
+                };
+            }
+        }
+        
+        report.finish()
+            .eprint((fname, self.source.unwrap_or_else(|| Source::from(String::new()))))
+            .unwrap();
+        
+        ExitCode::FAILURE
     }
 }
