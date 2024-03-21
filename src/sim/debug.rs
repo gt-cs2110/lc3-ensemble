@@ -2,8 +2,8 @@
 //! 
 //! The key type here is [`Breakpoint`], which can be appended to the [`Simulator`]'s
 //! breakpoint field to cause the simulator to break.
-use std::cell::RefCell;
 use std::fmt::Write;
+use std::sync::Mutex;
 
 use crate::ast::Reg;
 
@@ -46,8 +46,10 @@ pub enum Breakpoint {
         value: Comparator
     },
 
-    /// Breaks based on generic function condition.
-    Generic(RCFnMut),
+    /// Breaks based on an arbitrarily defined function.
+    /// 
+    /// This can be constructed with the [`Breakpoint::generic`] function.
+    Generic(BreakpointFn),
 
     /// Both conditions have to apply for the break to be applied.
     And([Box<Breakpoint>; 2]),
@@ -55,20 +57,22 @@ pub enum Breakpoint {
     Or([Box<Breakpoint>; 2]),
 }
 
-type RCFnMut = RefCell<Box<dyn FnMut(&Simulator) -> bool>>;
+impl Breakpoint where Breakpoint: Send + Sync { /* assert Breakpoint is send/sync */ }
+type BreakpointFn = Mutex<Box<dyn FnMut(&Simulator) -> bool + Send + 'static>>;
+
 impl Breakpoint {
     /// Creates a breakpoint out of a function.
-    pub fn generic(f: impl FnMut(&Simulator) -> bool + 'static) -> Breakpoint {
-        Breakpoint::Generic(RefCell::new(Box::new(f)))
+    pub fn generic(f: impl FnMut(&Simulator) -> bool + Send + 'static) -> Breakpoint {
+        Breakpoint::Generic(Mutex::new(Box::new(f)))
     }
 
-    /// Checks if a break should occur
+    /// Checks if a break should occur.
     pub fn check(&self, sim: &Simulator) -> bool {
         match self {
             Breakpoint::PC(cmp) => cmp.check(sim.pc),
             Breakpoint::Reg { reg, value: cmp } => cmp.check(sim.reg_file[*reg].get()),
             Breakpoint::Mem { addr, value: cmp } => cmp.check(sim.mem.0[*addr as usize].get()), // this is not using mem's get because we don't want to trigger an IO read
-            Breakpoint::Generic(pred) => (pred.borrow_mut())(sim),
+            Breakpoint::Generic(pred) => (pred.lock().unwrap())(sim),
             Breakpoint::And([l, r]) => l.check(sim) && r.check(sim),
             Breakpoint::Or([l, r]) => l.check(sim) || r.check(sim),
         }
