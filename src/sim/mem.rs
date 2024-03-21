@@ -300,19 +300,24 @@ const USER_RANGE: std::ops::Range<u16> = 0x3000..0xFE00;
 #[derive(Debug)]
 pub struct Mem(pub(super) Box<[Word; N]>);
 impl Mem {
-    /// Creates new uninitialized memory.
-    pub fn new() -> Self {
-        let mut mem = Self({
-            std::iter::repeat_with(Word::new_uninit)
+    /// Creates a new memory with a provided initializer.
+    fn create_with(initializer: impl FnMut() -> Word) -> Self {
+        Self({
+            std::iter::repeat_with(initializer)
                 .take(N)
-                .collect::<Vec<_>>()
+                .collect::<Box<_>>()
                 .try_into()
                 .unwrap_or_else(|_| unreachable!("iterator should have had {N} elements"))
-        });
-        // clear out IO section
-        mem.copy_block(IO_START, &[Word::new_init(0); IO_START.wrapping_neg() as usize]);
-        
-        mem
+        })
+    }
+    /// Creates a new memory with random, uninitialized values.
+    pub fn new() -> Self {
+        Self::create_with(Word::new_uninit)
+    }
+
+    /// Creates a new memory with zeroed (but initialized) values.
+    pub fn zeroed() -> Self {
+        Self::create_with(|| Word::new_init(0))
     }
 
     /// Copies a block into this memory.
@@ -376,6 +381,11 @@ impl RegFile {
     /// Creates a register file with uninitialized data.
     pub fn new() -> Self {
         Self(std::array::from_fn(|_| Word::new_uninit()))
+    }
+
+    /// Creates a register file with zeroed data.
+    pub fn zeroed() -> Self {
+        Self(std::array::from_fn(|_| Word::new_init(0)))
     }
 }
 impl std::ops::Index<Reg> for RegFile {

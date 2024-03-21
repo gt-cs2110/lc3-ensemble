@@ -133,18 +133,28 @@ pub struct Simulator {
     /// does not require closing the entire Simulator.
     pub io: Option<io::SimIO>,
 
-    /// Allocated blocks in object file.
-    /// 
-    /// Keeps track of allocated blocks in the current object file.
-    /// Loading and setting to an allocated block does not 
-    /// cause register/memory strictness errors.
-    alloca: Box<[(u16, u16)]>,
-
     /// Machine control.
     /// If unset, the program stops.
+    /// 
+    /// This is publicly accessible via a reference through [`Simulator::mcr`].
     mcr: Arc<AtomicBool>,
 
-    /// Any breakpoints to check for.
+    /// Allocated blocks in object file.
+    /// 
+    /// This field keeps track of "allocated" blocks 
+    /// (memory written to by instructions or directives like .blkw)
+    /// in the current object file.
+    /// 
+    /// Loading and storing uninitialized data in an allocated block
+    /// does not cause strictness errors because we're assuming
+    /// the programmer is using those as data stores.
+    /// 
+    /// This is technically a bit lax, because it lets them write
+    /// into instructions but oops.
+    alloca: Box<[(u16, u16)]>,
+
+
+    /// Breakpoints for the simulator.
     pub breakpoints: Vec<Breakpoint>,
 
     /// Indicates whether the PC has been incremented in the fetch stage yet.
@@ -155,32 +165,55 @@ pub struct Simulator {
 }
 
 impl Simulator {
-    /// Creates a new simulator, without any object files loaded.
-    pub fn new() -> Self {
+    /// Creates a new simulator with the provided initializers.
+    fn create_with(
+        mem_init: impl FnOnce() -> Mem,
+        reg_init: impl FnOnce() -> RegFile
+    ) -> Self {
         Self {
-            mem: Mem::new(),
-            reg_file: RegFile::new(),
+            mem: mem_init(),
+            reg_file: reg_init(),
             pc: 0x3000,
             psr: PSR::new(),
-            saved_sp: Word::new_init(0x2FFF),
+            saved_sp: Word::new_init(0x3000),
             sr_entered: 0,
             strict: false,
             io: None,
             alloca: Box::new([]),
-            mcr: Arc::new(AtomicBool::new(false)),
+            mcr: Arc::default(),
             breakpoints: vec![],
-            prefetch: false
+            prefetch: false,
         }
     }
+    /// Creates a new simulator that is completely zeroed out.
+    pub fn zeroed() -> Self {
+        Self::create_with(
+            Mem::zeroed,
+            RegFile::zeroed
+        )
+    }
+    /// Creates a new simulator, with randomized memory 
+    /// and with the OS loaded, but without a loaded object file.
+    pub fn new() -> Self {
+        let mut sim = Self::create_with(
+            Mem::new,
+            RegFile::new
+        );
+        sim.load_os();
+        sim
+    }
 
-    /// Loads and initializes the operating system (traps) and IO.
+    /// Loads and initializes the operating system.
     /// 
-    /// Even without the OS, the HALT trap can be used.
+    /// This will initialize kernel space and create trap handlers,
+    /// however it will not load working IO. This can cause IO
+    /// traps such as `GETC` and `PUTC` to hang. The only trap that 
+    /// is assured to function without IO is `HALT`.
+    /// 
+    /// To initialize the IO, use [`Simulator::open_io`].
     pub fn load_os(&mut self) {
         use crate::parse::parse_ast;
         use crate::asm::assemble;
-
-        self.io.replace(io::SimIO::new(Arc::clone(&self.mcr)));
 
         let os_file = include_str!("os.asm");
         let ast = parse_ast(os_file).unwrap();
@@ -188,6 +221,12 @@ impl Simulator {
 
         self.load_obj_file(&obj);
     }
+    
+    /// Sets and initializes the IO handler.
+    pub fn open_io(&mut self, _io: impl IODevice) {
+        todo!()
+    }
+
     /// Closes the IO handler and awaits for the display to finish.
     pub fn close_io(&mut self) -> std::thread::Result<()> {
         let Some(io) = self.io.take() else { return Ok(()) } ;
