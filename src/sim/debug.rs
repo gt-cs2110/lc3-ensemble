@@ -132,8 +132,22 @@ impl std::ops::BitOr for Breakpoint {
         Breakpoint::Or([Box::new(self), Box::new(rhs)])
     }
 }
+impl PartialEq for Breakpoint {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::PC(l0), Self::PC(r0)) => l0 == r0,
+            (Self::Reg { reg: l_reg, value: l_value }, Self::Reg { reg: r_reg, value: r_value }) => l_reg == r_reg && l_value == r_value,
+            (Self::Mem { addr: l_addr, value: l_value }, Self::Mem { addr: r_addr, value: r_value }) => l_addr == r_addr && l_value == r_value,
+            (Self::Generic(_), Self::Generic(_)) => false, /* can't really figure this one out */
+            (Self::And(l0), Self::And(r0)) => l0 == r0,
+            (Self::Or(l0), Self::Or(r0)) => l0 == r0,
+            _ => false,
+        }
+    }
+}
 
 /// Predicate checking whether the current value is equal to the value.
+#[derive(PartialEq, Eq)]
 pub struct Comparator {
     flag: u8,
     /// The value we're checking against.
