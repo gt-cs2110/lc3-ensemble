@@ -1,7 +1,12 @@
 //! IO handling for LC-3.
 //! 
-//! The main struct of this module is the [`SimIO`] struct,
-//! which handles the keyboard and display.
+//! The interface for IO devices is defined with the [`IODevice`] trait.
+//! This is exposed to the simulator with the [`SimIO`] enum.
+//! 
+//! Besides those two key items, this module also includes:
+//! - [`NoIO`]: The implementation for no IO.
+//! - [`BiChannelIO`]: The basic implementation for basic IO.
+//! - [`CustomIO`]: A wrapper around custom IO implementations.
 
 use std::io::{stdin, stdout, BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,115 +20,6 @@ const DSR: u16  = 0xFE04;
 const DDR: u16  = 0xFE06;
 const MCR: u16  = 0xFFFE;
 
-/// Simulator input/output.
-/// 
-/// This contains a **keyboard**, which is accessible through the KBSR and KBDR. 
-/// (Note that due to the limitations of terminals, the key is displayed and
-/// characters only appear once a new line appears in the input.)
-/// 
-/// This also contains a **display**, which is accessible through the DSR and DDR.
-pub struct SimIO {
-    /// Whether the keyboard has received a new character.
-    kb_status: Arc<AtomicBool>,
-    /// A channel to access the keyboard's characters.
-    kb_data: mpsc::Receiver<u8>,
-    /// The thread where the keyboard's process occurs.
-    #[allow(unused)]
-    kb_handler: JoinHandle<()>,
-    
-    /// Whether the display is ready to receive a new character.
-    display_status: Arc<AtomicBool>,
-    /// A channel to send characters to the display.
-    display_data: mpsc::Sender<u8>,
-    /// The thread where the display's process occurs.
-    display_handler: JoinHandle<()>,
-
-    /// The MCR.
-    mcr: Arc<AtomicBool>
-}
-
-impl SimIO {
-    /// Creates the IO processes.
-    pub fn new(mcr: Arc<AtomicBool>) -> SimIO {
-        let (kb_send, kb_recv) = mpsc::sync_channel(1);
-        let (ds_send, ds_recv) = mpsc::channel();
-        
-        let kbs = Arc::new(AtomicBool::new(false));
-        let kb_status = Arc::clone(&kbs);
-        let dss = Arc::new(AtomicBool::new(false));
-        let display_status = Arc::clone(&dss);
-
-        let kb_status = Arc::clone(&kb_status);
-        let display_status = Arc::clone(&display_status);
-
-        // STDIN loop
-        let kb_handler = std::thread::spawn(move || loop {
-            let buf = stdin().lock().fill_buf().unwrap().to_vec();
-            for byte in buf {
-                let result = kb_send.send(byte);
-                
-                match result {
-                    Ok(_) => {
-                        stdin().lock().consume(1);
-                        kbs.store(true, Ordering::Relaxed);
-                    },
-                    Err(_) => return,
-                }
-            }
-        });
-
-        // STDOUT loop
-        let display_handler = std::thread::spawn(move || loop {
-            dss.store(true, Ordering::Relaxed);
-            let result = ds_recv.recv();
-            dss.store(false, Ordering::Release);
-            
-            match result {
-                Ok(b) => {
-                    stdout().write_all(&[b]).unwrap();
-                    stdout().flush().unwrap();
-                },
-                Err(_) => return,
-            }
-        });
-
-        Self {
-            kb_status,
-            kb_data: kb_recv,
-            kb_handler,
-
-            display_status,
-            display_data: ds_send,
-            display_handler,
-
-            mcr
-        }
-    }
-
-    /// Closes the keyboard and display channels and waits for the display to complete.
-    pub fn join(self) -> std::thread::Result<()> {
-        let Self { kb_status: _, kb_data, kb_handler: _, display_status: _, display_data, display_handler, mcr: _ } = self;
-
-        std::mem::drop(kb_data);
-        std::mem::drop(display_data);
-
-        display_handler.join()
-    }
-}
-
-impl std::fmt::Debug for SimIO {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SimIO").finish_non_exhaustive()
-    }
-}
-/// Converts boolean data to a register word
-fn io_bool_data(b: bool) -> u16 {
-    match b {
-        true  => 0x8000,
-        false => 0x0000,
-    }
-}
-
 /// An IO device that can be read/written to.
 pub trait IODevice {
     /// Reads the data at the given memory-mapped address.
@@ -136,28 +32,141 @@ pub trait IODevice {
     /// 
     /// This returns whether the write was successful or not.
     fn io_write(&self, addr: u16, data: u16) -> bool;
+
+    /// Tries to close this IO device.
+    fn close(self);
 }
-impl IODevice for SimIO {
+impl dyn IODevice {} // assert IODevice is dyn safe
+
+/// No IO. All reads and writes are unsuccessful.
+pub struct NoIO;
+impl IODevice for NoIO {
+    fn io_read(&self, _addr: u16) -> Option<u16> {
+        None
+    }
+
+    fn io_write(&self, _addr: u16, _data: u16) -> bool {
+        false
+    }
+    
+    fn close(self) {}
+}
+
+/// An IO that reads from one channel and writes to another.
+/// 
+/// This binds the reader channel to the KBSR and KBDR.
+/// When a character is ready from the reader channel,
+/// the KBSR status is enabled and the character is accessible from the KBDR.
+/// 
+/// This binds the writer channel to the DSR and DDR.
+/// When a character is ready to be written to the writer channel,
+/// the DSR status is enabled and the character can be written to the DDR.
+/// 
+/// This IO type also exposes the MCR in the MCR MMIO address.
+pub struct BiChannelIO {
+    read_status:  Arc<AtomicBool>,
+    read_data:    mpsc::Receiver<u8>,
+    #[allow(unused)]
+    read_handler: JoinHandle<()>,
+
+    write_status:  Arc<AtomicBool>,
+    write_data:    mpsc::Sender<u8>,
+    write_handler: JoinHandle<()>,
+
+    mcr: Arc<AtomicBool>
+}
+impl BiChannelIO {
+    /// Creates a new bi-channel IO device with the given reader and writer.
+    /// 
+    /// This uses a function to instantiate the reader/writer so that
+    /// reader/writers that use locks do not have to hold their lock
+    /// for excessive amounts of time.
+    /// 
+    /// Note that the writer flushes every character.
+    pub fn new<R: BufRead, W: Write>(
+        mut reader: impl FnMut() -> R + Send + 'static, 
+        mut writer: impl FnMut() -> W + Send + 'static, 
+        mcr: Arc<AtomicBool>
+    ) -> Self {
+        let (read_tx, read_rx) = mpsc::sync_channel(1);
+        let (write_tx, write_rx) = mpsc::channel();
+
+        let readst = Arc::new(AtomicBool::default());
+        let read_status = Arc::clone(&readst);
+        let writest = Arc::new(AtomicBool::default());
+        let write_status = Arc::clone(&writest);
+
+        // Reader thread:
+        let read_handler = std::thread::spawn(move || loop {
+            let buf = reader().fill_buf().unwrap().to_vec();
+            for byte in buf {
+                let result = read_tx.send(byte);
+                readst.store(true, Ordering::Relaxed);
+                
+                match result {
+                    Ok(()) => reader().consume(1),
+                    Err(_) => return,
+                }
+            }
+        });
+
+        // Writer thread:
+        let write_handler = std::thread::spawn(move || loop {
+            writest.store(true, Ordering::Relaxed); // ready to receive
+            let result = write_rx.recv();
+            writest.store(false, Ordering::Relaxed); // no receiving while processing results
+
+            match result {
+                Ok(byte) => {
+                    writer().write_all(&[byte]).unwrap();
+                    writer().flush().unwrap();
+                },
+                Err(_) => return, // after a disconnect, this doesn't need to do anything
+            }
+        });
+        
+        Self {
+            read_status, 
+            read_data: read_rx, 
+            read_handler, 
+            write_status, 
+            write_data: write_tx, 
+            write_handler, 
+            mcr
+        }
+    }
+
+    /// Creates a bi-channel IO device with stdin being the read data and stdout being the write data.
+    /// 
+    /// Note that due to how stdin works in terminals, data is only sent once a new line is typed.
+    pub fn stdio(mcr: Arc<AtomicBool>) -> Self {
+        Self::new(|| stdin().lock(), stdout, mcr)
+    }
+}
+impl IODevice for BiChannelIO {
     fn io_read(&self, addr: u16) -> Option<u16> {
         match addr {
-            KBSR => Some(io_bool_data(self.kb_status.load(Ordering::Relaxed))),
-            KBDR => match self.kb_data.try_recv() {
+            KBSR => Some(io_bool(self.read_status.load(Ordering::Relaxed))),
+            KBDR => match self.read_data.try_recv() {
                 Ok(b) => {
-                    self.kb_status.store(false, Ordering::Release);
+                    self.read_status.store(false, Ordering::Release);
                     Some(u16::from(b))
                 },
                 Err(TryRecvError::Empty) => None,
-                Err(TryRecvError::Disconnected) => None, // unreachable: keyboard disconnected
+
+                // this can occur if the read handler panicked.
+                // however, this just means we can't get the data, so just return None
+                Err(TryRecvError::Disconnected) => None,
             },
-            DSR => Some(io_bool_data(self.display_status.load(Ordering::Acquire))),
-            MCR => Some(io_bool_data(self.mcr.load(Ordering::Relaxed))),
+            DSR => Some(io_bool(self.write_status.load(Ordering::Acquire))),
+            MCR => Some(io_bool(self.mcr.load(Ordering::Relaxed))),
             _ => None
         }
     }
 
     fn io_write(&self, addr: u16, data: u16) -> bool {
         match addr {
-            DDR => self.display_data.send(data as u8).is_ok(),
+            DDR => self.write_data.send(data as u8).is_ok(),
             MCR => {
                 // store whether last bit is 1 (e.g., if data is negative)
                 self.mcr.store((data as i16) < 0, Ordering::Relaxed);
@@ -166,25 +175,150 @@ impl IODevice for SimIO {
             _ => false
         }
     }
+    
+    fn close(self) {
+        let Self {
+            read_status: _,
+            read_data,
+            read_handler: _,
+            write_status: _,
+            write_data,
+            write_handler,
+            mcr: _
+        } = self;
+
+        // Drop the channels.
+        std::mem::drop(read_data);
+        std::mem::drop(write_data);
+
+        // Wait for the write handler to join.
+        // This shouldn't block for long, because we just
+        // disconnected the channel.
+
+        // We're not going to wait for the read handler
+        // because it can hang on reading, which prevents it from seeing
+        // the channel is disconnected.
+
+        // Also, don't error.
+        // Skill issue.
+        let _ = write_handler.join();
+    }
 }
-impl<D: IODevice> IODevice for &D {
+/// Converts boolean data to a register word
+fn io_bool(b: bool) -> u16 {
+    match b {
+        true  => 0x8000,
+        false => 0x0000,
+    }
+}
+
+// `Box<dyn IODevice>` does not work.
+// It doesn't implement IODevice because it doesn't implement close
+// (because you can't close on an unsized dyn IODevice).
+// 
+// However, changing the signature makes BiChannelIO annoying.
+// So, this hack basically puts the device in an Option
+// and closes it by taking it out and closing it without consuming the entire object,
+// making close only require &mut Self instead of Self.
+trait IODeviceMutClosable {
+    fn io_read(&self, addr: u16) -> Option<u16>;
+    fn io_write(&self, addr: u16, data: u16) -> bool;
+
+    /// Closes but doesn't consume the object.
+    /// 
+    /// The object should not be used after this point.
+    fn take_close(&mut self);
+}
+impl<D: IODevice> IODeviceMutClosable for Option<D> {
     fn io_read(&self, addr: u16) -> Option<u16> {
-        (*self).io_read(addr)
+        self.as_ref().unwrap().io_read(addr)
+    }
+    fn io_write(&self, addr: u16, data: u16) -> bool {
+        self.as_ref().unwrap().io_write(addr, data)
+    }
+    fn take_close(&mut self) {
+        self.take().unwrap().close()
+    }
+}
+
+/// An opaque box that holds custom defined IO.
+/// 
+/// This can be used to use a different implementation of IO
+/// than the ones implemented in this module.
+pub struct CustomIO(Box<dyn IODeviceMutClosable>);
+impl CustomIO {
+    /// Creates a new custom IO.
+    pub fn new(device: impl IODevice + 'static) -> Self {
+        CustomIO(Box::new(Some(device)))
+    }
+}
+impl IODevice for CustomIO {
+    fn io_read(&self, addr: u16) -> Option<u16> {
+        self.0.io_read(addr)
     }
 
     fn io_write(&self, addr: u16, data: u16) -> bool {
-        (*self).io_write(addr, data)
+        self.0.io_write(addr, data)
+    }
+
+    fn close(mut self) {
+        self.0.take_close();
+        std::mem::drop(self)
     }
 }
-impl<D: IODevice> IODevice for Option<D> {
+
+/// All the variants of IO accepted by the Simulator.
+pub enum SimIO {
+    /// No IO. This corresponds to the implementation of [`NoIO`].
+    None,
+    /// A bi-channel IO implementation. See [`BiChannelIO`].
+    BiChannel(BiChannelIO),
+    /// A custom IO implementation. See [`CustomIO`].
+    Custom(CustomIO)
+}
+impl std::fmt::Debug for SimIO {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SimIO")
+            .finish_non_exhaustive()
+    }
+}
+impl From<NoIO> for SimIO {
+    fn from(_value: NoIO) -> Self {
+        SimIO::None
+    }
+}
+impl From<BiChannelIO> for SimIO {
+    fn from(value: BiChannelIO) -> Self {
+        SimIO::BiChannel(value)
+    }
+}
+impl From<CustomIO> for SimIO {
+    fn from(value: CustomIO) -> Self {
+        SimIO::Custom(value)
+    }
+}
+impl IODevice for SimIO {
     fn io_read(&self, addr: u16) -> Option<u16> {
-        self.as_ref()?.io_read(addr)
+        match self {
+            SimIO::None => NoIO.io_read(addr),
+            SimIO::BiChannel(io) => io.io_read(addr),
+            SimIO::Custom(io) => io.io_read(addr)
+        }
     }
 
     fn io_write(&self, addr: u16, data: u16) -> bool {
         match self {
-            Some(d) => d.io_write(addr, data),
-            None => false,
+            SimIO::None => NoIO.io_write(addr, data),
+            SimIO::BiChannel(io) => io.io_write(addr, data),
+            SimIO::Custom(io) => io.io_write(addr, data)
+        }
+    }
+
+    fn close(self) {
+        match self {
+            SimIO::None => NoIO.close(),
+            SimIO::BiChannel(io) => io.close(),
+            SimIO::Custom(io) => io.close()
         }
     }
 }

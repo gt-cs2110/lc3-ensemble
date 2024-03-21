@@ -5,10 +5,11 @@
 //! This module consists of:
 //! - [`Simulator`]: The struct that simulates assembled code.
 //! - [`mem`]: The module handling memory relating to the registers.
-//! - [`SimIO`]: The struct handling the simulator's IO.
+//! - [`io`]: The module handling simulator IO.
+//! - [`debug`]: The module handling types of breakpoints for the simulator.
 
 pub mod mem;
-mod io;
+pub mod io;
 pub mod debug;
 
 use std::sync::atomic::AtomicBool;
@@ -18,7 +19,7 @@ use crate::asm::ObjectFile;
 use crate::ast::reg_consts::{R6, R7};
 use crate::ast::sim::SimInstr;
 use crate::ast::ImmOrReg;
-pub use io::*;
+use io::*;
 
 use self::debug::Breakpoint;
 use self::mem::{AssertInit as _, Mem, MemAccessCtx, RegFile, Word};
@@ -131,7 +132,7 @@ pub struct Simulator {
     /// This is an Option because it is only enabled when the OS is active.
     /// It is also an Option so that closing it (via [`Simulator::close_io`]) 
     /// does not require closing the entire Simulator.
-    pub io: Option<io::SimIO>,
+    pub io: SimIO,
 
     /// Machine control.
     /// If unset, the program stops.
@@ -178,7 +179,7 @@ impl Simulator {
             saved_sp: Word::new_init(0x3000),
             sr_entered: 0,
             strict: false,
-            io: None,
+            io: SimIO::from(NoIO),
             alloca: Box::new([]),
             mcr: Arc::default(),
             breakpoints: vec![],
@@ -223,14 +224,14 @@ impl Simulator {
     }
     
     /// Sets and initializes the IO handler.
-    pub fn open_io(&mut self, _io: impl IODevice) {
-        todo!()
+    pub fn open_io<IO: Into<SimIO>>(&mut self, io: IO) {
+        let io = std::mem::replace(&mut self.io, io.into());
+        io.close()
     }
 
-    /// Closes the IO handler and awaits for the display to finish.
-    pub fn close_io(&mut self) -> std::thread::Result<()> {
-        let Some(io) = self.io.take() else { return Ok(()) } ;
-        io.join()
+    /// Closes the IO handler, waiting for it to close.
+    pub fn close_io(&mut self) {
+        self.open_io(NoIO) // the illusion of choice
     }
     
     /// Loads an object file into this simulator.
@@ -343,8 +344,8 @@ impl Simulator {
     /// reference.
     /// If you want to use this, try `self.mem_ctx(&self.io)` (or create a macro that does
     /// what this internally does).
-    pub fn mem_ctx<'ctx>(&self, io: &'ctx Option<io::SimIO>) -> MemAccessCtx<'ctx> {
-        MemAccessCtx { privileged: self.psr.privileged(), strict: self.strict, io: io.as_ref() }
+    pub fn mem_ctx<'ctx>(&self, io: &'ctx SimIO) -> MemAccessCtx<'ctx> {
+        MemAccessCtx { privileged: self.psr.privileged(), strict: self.strict, io }
     }
 
     /// Interrupt, trap, and exception handler.

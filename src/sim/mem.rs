@@ -7,8 +7,7 @@
 
 use crate::ast::Reg;
 
-use super::io::IODevice as _;
-use super::SimErr;
+use super::{IODevice, SimErr};
 
 /// A memory location that can be read and written to.
 /// 
@@ -289,7 +288,7 @@ pub struct MemAccessCtx<'ctx> {
     /// This does not affect [`Mem::get`].
     pub strict: bool,
     /// Reference to the IO device.
-    pub io: Option<&'ctx super::io::SimIO>
+    pub io: &'ctx super::SimIO
 }
 
 const N: usize = 2usize.pow(16);
