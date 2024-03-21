@@ -318,7 +318,10 @@ impl Simulator {
     /// This function will always jump to `mem[vect]` at the end of this function.
     pub fn handle_interrupt(&mut self, vect: u16, priority: Option<u8>) -> Result<(), SimErr> {
         if priority.is_some_and(|prio| prio <= self.psr.priority()) { return Ok(()) };
-        if vect == 0x25 { return Err(SimErr::ProgramHalted) }; // HALT!
+        if vect == 0x25 /* HALT */ {
+            self.offset_pc(-1, false)?; // decrement PC so that execution goes back here
+            return Err(SimErr::ProgramHalted)
+        };
         
         if !self.psr.privileged() {
             std::mem::swap(&mut self.saved_sp, &mut self.reg_file[R6]);
