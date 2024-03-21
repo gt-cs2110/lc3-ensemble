@@ -7,7 +7,7 @@ use crate::sim::mem::Word;
 use super::{ObjectFile, SymbolTable};
 
 impl ObjectFile {
-    /// Writes an object file into a Vec<u8>.
+    /// Writes an object file into a byte vector.
     pub fn write_bytes(&self) -> Vec<u8> {
         // Object file specification:
         // Data is divided into discrete chunks, which start with one of:
@@ -92,7 +92,8 @@ impl ObjectFile {
         bytes
     }
 
-    /// Reads a Vec<u8> back into object file information.
+    /// Reads a byte slice back into object file information,
+    /// returning None if a parsing error occurs.
     pub fn read_bytes(mut vec: &[u8]) -> Option<ObjectFile> {
         let mut block_map    = BTreeMap::new();
         let mut label_table  = HashMap::new();
