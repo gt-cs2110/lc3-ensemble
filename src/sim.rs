@@ -162,7 +162,10 @@ pub struct Simulator {
     /// 
     /// This is just for error handling purposes. It's used to compute
     /// the PC of the instruction that caused an error. See [`Simulator::prefetch_pc`].
-    prefetch: bool
+    prefetch: bool,
+
+    /// Indicates whether the last execution hit a breakpoint.
+    hit_breakpoint: bool
 }
 
 impl Simulator {
@@ -184,6 +187,7 @@ impl Simulator {
             mcr: Arc::default(),
             breakpoints: vec![],
             prefetch: false,
+            hit_breakpoint: false
         }
     }
     /// Creates a new simulator that is completely zeroed out.
@@ -336,6 +340,12 @@ impl Simulator {
             None    => true
         }
     }
+
+    /// Indicates whether the last execution of the simulator hit a breakpoint.
+    pub fn hit_breakpoint(&self) -> bool {
+        self.hit_breakpoint
+    }
+    
     /// Computes the memory access context, 
     /// which are flags that control privilege and checks when accessing memory
     /// (see [`Mem::get`] and [`Mem::set`]).
@@ -394,13 +404,19 @@ impl Simulator {
     fn run_while(&mut self, mut tripwire: impl FnMut(&mut Simulator) -> bool) -> Result<(), SimErr> {
         use std::sync::atomic::Ordering;
 
+        self.hit_breakpoint = false;
         self.mcr.store(true, Ordering::Relaxed);
         // event loop
         // run until:
         // 1. the MCR is set to 0
         // 2. the tripwire condition returns false
         // 3. any of the breakpoints are hit
-        while self.mcr.load(Ordering::Relaxed) && tripwire(self) && !self.breakpoints.iter().any(|bp| bp.check(self)) {
+        while self.mcr.load(Ordering::Relaxed) && tripwire(self) {
+            if self.breakpoints.iter().any(|bp| bp.check(self)) {
+                self.hit_breakpoint = true;
+                break;
+            }
+
             match self.step_in() {
                 Ok(_) => {},
                 Err(SimErr::ProgramHalted) => break,
