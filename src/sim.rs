@@ -390,19 +390,17 @@ impl Simulator {
         self.set_pc(addr, true)
     }
 
-    /// Execute the program.
-    pub fn run(&mut self) -> Result<(), SimErr> {
+    /// Runs until the condition returns false (or any of the typical breaks occur)
+    fn run_while(&mut self, mut tripwire: impl FnMut(&mut Simulator) -> bool) -> Result<(), SimErr> {
         use std::sync::atomic::Ordering;
 
         self.mcr.store(true, Ordering::Relaxed);
-
         // event loop
-        while self.mcr.load(Ordering::Relaxed) {
-            // if any breakpoints are hit, then stop
-            if self.breakpoints.iter().any(|bp| bp.check(self)) {
-                break;
-            }
-
+        // run until:
+        // 1. the MCR is set to 0
+        // 2. the tripwire condition returns false
+        // 3. any of the breakpoints are hit
+        while self.mcr.load(Ordering::Relaxed) && tripwire(self) && !self.breakpoints.iter().any(|bp| bp.check(self)) {
             match self.step_in() {
                 Ok(_) => {},
                 Err(SimErr::ProgramHalted) => break,
@@ -412,10 +410,16 @@ impl Simulator {
                 }
             }
         }
-
+    
         self.mcr.store(false, Ordering::Release);
         Ok(())
     }
+
+    /// Execute the program.
+    pub fn run(&mut self) -> Result<(), SimErr> {
+        self.run_while(|_| true)
+    }
+    
     /// Perform one step through the simulator's execution.
     pub fn step_in(&mut self) -> Result<(), SimErr> {
         self.prefetch = true;
@@ -584,24 +588,25 @@ impl Simulator {
 
         Ok(())
     }
+
     /// Perform one step through the simulator's execution, treating complete subroutines as one step.
     pub fn step_over(&mut self) -> Result<(), SimErr> {
         let curr_frame = self.sr_entered;
-        self.step_in()?;
-        // step until we have landed back in the same frame
-        while curr_frame < self.sr_entered {
-            self.step_in()?;
-        }
 
-        Ok(())
+        // always do at least one step
+        self.step_in()?;
+        // run until we have landed back in the same frame
+        self.run_while(|sim| curr_frame < sim.sr_entered)
     }
+
     /// Run through the simulator's execution until the subroutine is exited.
     pub fn step_out(&mut self) -> Result<(), SimErr> {
         let curr_frame = self.sr_entered;
+
+        // always do at least one step
         self.step_in()?;
-        // step until we get out of this frame
-        while curr_frame != 0 && curr_frame <= self.sr_entered {
-            self.step_in()?;
+        if curr_frame != 0 {
+            self.run_while(|sim| curr_frame <= sim.sr_entered)?;
         }
 
         Ok(())
