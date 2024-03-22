@@ -88,12 +88,14 @@ impl BiChannelIO {
     /// 
     /// This calls the writer function every time a byte needs to be written to the
     /// IO output.
+    /// and calls the writer function everytime a byte needs to be written to the
+    /// IO output.
     pub fn new(
         mut reader: impl FnMut() -> Result<u8, Stop> + Send + 'static, 
         mut writer: impl FnMut(u8) -> Result<(), Stop> + Send + 'static, 
         mcr: Arc<AtomicBool>
     ) -> Self {
-        let (read_tx, read_rx) = mpsc::sync_channel(0);
+        let (read_tx, read_rx) = mpsc::sync_channel(1);
         let (write_tx, write_rx) = mpsc::channel();
 
         let readst = Arc::new(AtomicBool::default());
@@ -103,11 +105,10 @@ impl BiChannelIO {
 
         // Reader thread:
         let read_handler = std::thread::spawn(move || loop {
-            readst.store(false, Ordering::Relaxed);
             let Ok(byte) = reader() else { return };
-            readst.store(true, Ordering::Relaxed);
             
             let result = read_tx.send(byte);
+            readst.store(true, Ordering::Relaxed);
 
             let Ok(()) = result else { return };
         });
@@ -165,7 +166,10 @@ impl IODevice for BiChannelIO {
         match addr {
             KBSR => Some(io_bool(self.read_status.load(Ordering::Relaxed))),
             KBDR => match self.read_data.try_recv() {
-                Ok(b) => Some(u16::from(b)),
+                Ok(b) => {
+                    self.read_status.store(false, Ordering::Release);
+                    Some(u16::from(b))
+                },
                 Err(TryRecvError::Empty) => None,
 
                 // this can occur if the read handler panicked.
