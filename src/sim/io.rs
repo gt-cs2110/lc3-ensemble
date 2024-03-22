@@ -263,10 +263,10 @@ impl<D: IODevice> IODeviceMutClosable for Option<D> {
 /// 
 /// This can be used to use a different implementation of IO
 /// than the ones implemented in this module.
-pub struct CustomIO(Box<dyn IODeviceMutClosable>);
+pub struct CustomIO(Box<dyn IODeviceMutClosable + Send>);
 impl CustomIO {
     /// Creates a new custom IO.
-    pub fn new(device: impl IODevice + 'static) -> Self {
+    pub fn new(device: impl IODevice + Send + 'static) -> Self {
         CustomIO(Box::new(Some(device)))
     }
 }
