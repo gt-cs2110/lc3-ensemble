@@ -233,8 +233,8 @@ impl LineSymbolTable {
 pub struct SourceInfo {
     /// The source code.
     src: String,
-    /// Where each line is in source code.
-    line_indices: Vec<usize>,
+    /// Where each new line is in source code.
+    nl_indices: Vec<usize>,
     /// A mapping from each line with a statement in the source to an address.
     line_table: LineSymbolTable
 }
@@ -265,7 +265,7 @@ impl std::fmt::Debug for SourceInfo {
         }
 
         f.debug_struct("SourceInfo")
-            .field("line_indices", &self.line_indices)
+            .field("nl_indices", &self.nl_indices)
             .field("line_table", &Map::new({
                 self.line_table.iter()
                     .map(|(i, v)| (i, Addr(v)))
@@ -279,10 +279,34 @@ impl SourceInfo {
         &self.src
     }
 
-    /// Gets the line span in source (if the line index is valid).
+    /// Gets the character range for the provided line, including any whitespace.
+    /// 
+    /// This returns None if line is not in the interval `[0, number of lines)`.
+    fn raw_line_span(&self, line: usize) -> Option<Range<usize>> {
+        // Implementation detail:
+        // number of lines = self.nl_indices.len() + 1
+        if !(0..=self.nl_indices.len()).contains(&line) {
+            return None;
+        };
+
+        let end = match self.nl_indices.get(line) {
+            Some(&n) => n,
+            None     => self.src.len(),
+        };
+        
+        let start = match line == 0 {
+            false => self.nl_indices[line - 1] + 1,
+            true  => 0,
+        };
+        
+        Some(start..end)
+    }
+
+    /// Gets the character range for the provided line, excluding any whitespace.
+    /// 
+    /// This returns None if line is not in the interval `[0, number of lines)`.
     pub fn line_span(&self, line: usize) -> Option<Range<usize>> {
-        let mut end   = *self.line_indices.get(line)?;
-        let mut start = self.line_indices.get(line - 1).map_or(0, |i| i + 1);
+        let Range { mut start, mut end } = self.raw_line_span(line)?;
         
         // shift line span by trim
         let line = &self.src[start..end];
@@ -306,8 +330,12 @@ impl SourceInfo {
     /// the line number is given as the last line and the character number
     /// is given as the number of characters after the start of the line.
     pub fn get_pos_pair(&self, index: usize) -> (usize, usize) {
-        let lno = self.line_indices.partition_point(|&start| start < index);
-        let cno = (index - self.line_indices[lno]).saturating_sub(1);
+        let lno = self.nl_indices.partition_point(|&start| start < index);
+
+        let Range { start: lstart, .. } = self.raw_line_span(index)
+            .or_else(|| self.raw_line_span(self.nl_indices.len()))
+            .unwrap_or(0..0);
+        let cno = index - lstart;
         (lno, cno)
     }
 }
@@ -420,7 +448,7 @@ impl SymbolTable {
                 labels: labels.into_iter().map(|(k, (addr, span))| (k, (addr, span.start))).collect(),
                 src_info: src.map(|s| SourceInfo {
                     src: s.to_string(),
-                    line_indices,
+                    nl_indices: line_indices,
                     line_table: LineSymbolTable::new(lines),
                 })
             }),

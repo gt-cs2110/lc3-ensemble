@@ -81,8 +81,8 @@ impl ObjectFile {
                 }
 
                 bytes.push(0x03);
-                bytes.extend(u64::to_le_bytes(src.line_indices.len() as u64));
-                for &index in &src.line_indices {
+                bytes.extend(u64::to_le_bytes(src.nl_indices.len() as u64));
+                for &index in &src.nl_indices {
                     bytes.extend(u64::to_le_bytes(index as u64));
                 }
                 bytes.extend(u64::to_le_bytes(src.src.len() as u64));
@@ -156,7 +156,7 @@ impl ObjectFile {
                 src_info: match !line_table.is_empty() || line_indices.is_some() {
                     true  => Some(super::SourceInfo {
                         src: src?, 
-                        line_indices: line_indices?,
+                        nl_indices: line_indices?,
                         line_table: super::LineSymbolTable(line_table)
                     }),
                     false => None,
