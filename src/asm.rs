@@ -299,6 +299,17 @@ impl SourceInfo {
     pub fn read_line(&self, line: usize) -> Option<&str> {
         Some(&self.src[self.line_span(line)?])
     }
+
+    /// Calculates the line and character number for a given character index.
+    /// 
+    /// If the index exceeds the length of the string,
+    /// the line number is given as the last line and the character number
+    /// is given as the number of characters after the start of the line.
+    pub fn get_pos_pair(&self, index: usize) -> (usize, usize) {
+        let lno = self.line_indices.partition_point(|&start| start < index);
+        let cno = (index - self.line_indices[lno]).saturating_sub(1);
+        (lno, cno)
+    }
 }
 
 /// The symbol table created in the first assembler pass
@@ -417,9 +428,15 @@ impl SymbolTable {
         }
     }
 
-    /// Gets the address of a given label (if it exists).
+    /// Gets the memory address of a given label (if it exists).
     pub fn get_label(&self, label: &str) -> Option<u16> {
         self.labels.get(&label.to_uppercase()).map(|&(addr, _)| addr)
+    }
+
+    /// Gets the source span of a given label (if it exists).
+    pub fn find_label_source(&self, label: &str) -> Option<Range<usize>> {
+        let &(_, start) = self.labels.get(label)?;
+        Some(start..(start + label.len()))
     }
 
     /// Gets an iterable of the mapping from labels to addresses.
@@ -433,8 +450,11 @@ impl SymbolTable {
         self.src_info.as_ref()?.line_table.get(line)
     }
 
-    /// Tries to get the source line from the address.
-    pub fn find_source_line(&self, addr: u16) -> Option<usize> {
+    /// Gets the source line of a given memory address (if it exists.)
+    /// 
+    /// This can be converted into a source span (range of characters encompassed by the instruction)
+    /// using [`SymbolTable::source_info`] and [`SourceInfo::line_span`].
+    pub fn find_line_source(&self, addr: u16) -> Option<usize> {
         self.src_info.as_ref()?.line_table.find(addr)
     }
 
