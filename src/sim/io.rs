@@ -9,9 +9,10 @@
 //! - [`CustomIO`]: A wrapper around custom IO implementations.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::TryRecvError;
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 use std::thread::JoinHandle;
+
+use crossbeam_channel as cbc;
 
 const KBSR: u16 = 0xFE00;
 const KBDR: u16 = 0xFE02;
@@ -68,13 +69,11 @@ pub struct Stop;
 /// 
 /// This IO type also exposes the MCR in the MCR MMIO address.
 pub struct BiChannelIO {
-    read_status:  Arc<AtomicBool>,
-    read_data:    mpsc::Receiver<u8>,
+    read_data:    cbc::Receiver<u8>,
     #[allow(unused)]
     read_handler: JoinHandle<()>,
 
-    write_status:  Arc<AtomicBool>,
-    write_data:    mpsc::Sender<u8>,
+    write_data:    cbc::Sender<u8>,
     write_handler: JoinHandle<()>,
 
     mcr: Arc<AtomicBool>
@@ -95,39 +94,26 @@ impl BiChannelIO {
         mut writer: impl FnMut(u8) -> Result<(), Stop> + Send + 'static, 
         mcr: Arc<AtomicBool>
     ) -> Self {
-        let (read_tx, read_rx) = mpsc::sync_channel(1);
-        let (write_tx, write_rx) = mpsc::channel();
-
-        let readst = Arc::new(AtomicBool::default());
-        let read_status = Arc::clone(&readst);
-        let writest = Arc::new(AtomicBool::default());
-        let write_status = Arc::clone(&writest);
+        let (read_tx, read_rx) = cbc::bounded(1);
+        let (write_tx, write_rx) = cbc::bounded(1);
 
         // Reader thread:
         let read_handler = std::thread::spawn(move || loop {
             let Ok(byte) = reader() else { return };
-            
             let result = read_tx.send(byte);
-            readst.store(true, Ordering::Relaxed);
-
             let Ok(()) = result else { return };
         });
 
         // Writer thread:
         let write_handler = std::thread::spawn(move || {
-            writest.store(true, Ordering::Relaxed);
             for byte in write_rx {
-                writest.store(false, Ordering::Relaxed); // no receiving while processing results
                 let Ok(()) = writer(byte) else { return };
-                writest.store(true, Ordering::Relaxed); // ready to receive
             }
         });
         
         Self {
-            read_status, 
             read_data: read_rx, 
             read_handler, 
-            write_status, 
             write_data: write_tx, 
             write_handler, 
             mcr
@@ -149,6 +135,7 @@ impl BiChannelIO {
                     return Err(Stop);
                 };
 
+                stdin.consume(1);
                 Ok(byte)
             }, 
             |byte| {
@@ -164,19 +151,16 @@ impl BiChannelIO {
 impl IODevice for BiChannelIO {
     fn io_read(&self, addr: u16) -> Option<u16> {
         match addr {
-            KBSR => Some(io_bool(self.read_status.load(Ordering::Relaxed))),
+            KBSR => Some(io_bool(self.read_data.is_full())),
             KBDR => match self.read_data.try_recv() {
-                Ok(b) => {
-                    self.read_status.store(false, Ordering::Release);
-                    Some(u16::from(b))
-                },
-                Err(TryRecvError::Empty) => None,
+                Ok(b) => Some(u16::from(b)),
+                Err(cbc::TryRecvError::Empty) => None,
 
                 // this can occur if the read handler panicked.
                 // however, this just means we can't get the data, so just return None
-                Err(TryRecvError::Disconnected) => None,
+                Err(cbc::TryRecvError::Disconnected) => None,
             },
-            DSR => Some(io_bool(self.write_status.load(Ordering::Acquire))),
+            DSR => Some(io_bool(self.write_data.is_empty())),
             MCR => Some(io_bool(self.mcr.load(Ordering::Relaxed))),
             _ => None
         }
@@ -196,10 +180,8 @@ impl IODevice for BiChannelIO {
     
     fn close(self) {
         let Self {
-            read_status: _,
             read_data,
             read_handler: _,
-            write_status: _,
             write_data,
             write_handler,
             mcr: _
