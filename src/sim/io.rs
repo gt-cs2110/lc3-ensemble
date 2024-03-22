@@ -87,8 +87,11 @@ impl BiChannelIO {
     /// 
     /// This calls the writer function every time a byte needs to be written to the
     /// IO output.
-    /// and calls the writer function everytime a byte needs to be written to the
-    /// IO output.
+    /// 
+    /// This uses threads to read and write from input and output. As such,
+    /// the channels will continue to poll input and output even when the simulator
+    /// is not running. As such, care should be taken to not send messages through
+    /// the reader thread while the simulator is not running.
     pub fn new(
         mut reader: impl FnMut() -> Result<u8, Stop> + Send + 'static, 
         mut writer: impl FnMut(u8) -> Result<(), Stop> + Send + 'static, 
