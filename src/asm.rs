@@ -422,6 +422,12 @@ impl SymbolTable {
         self.labels.get(&label.to_uppercase()).map(|&(addr, _)| addr)
     }
 
+    /// Gets an iterable of the mapping from labels to addresses.
+    pub fn label_iter(&self) -> impl Iterator<Item=(&str, u16)> + '_ {
+        self.labels.iter()
+            .map(|(label, &(addr, _))| (&**label, addr))
+    }
+
     /// Gets the address of a given source line.
     pub fn get_line(&self, line: usize) -> Option<u16> {
         self.src_info.as_ref()?.line_table.get(line)
