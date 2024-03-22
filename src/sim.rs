@@ -345,7 +345,7 @@ impl Simulator {
     pub fn hit_breakpoint(&self) -> bool {
         self.hit_breakpoint
     }
-    
+
     /// Computes the memory access context, 
     /// which are flags that control privilege and checks when accessing memory
     /// (see [`Mem::get`] and [`Mem::set`]).
@@ -412,11 +412,6 @@ impl Simulator {
         // 2. the tripwire condition returns false
         // 3. any of the breakpoints are hit
         while self.mcr.load(Ordering::Relaxed) && tripwire(self) {
-            if self.breakpoints.iter().any(|bp| bp.check(self)) {
-                self.hit_breakpoint = true;
-                break;
-            }
-
             match self.step_in() {
                 Ok(_) => {},
                 Err(SimErr::ProgramHalted) => break,
@@ -424,6 +419,12 @@ impl Simulator {
                     self.mcr.store(false, Ordering::Release);
                     return Err(e);
                 }
+            }
+
+            // After executing, check that any breakpoints were hit.
+            if self.breakpoints.iter().any(|bp| bp.check(self)) {
+                self.hit_breakpoint = true;
+                break;
             }
         }
     
@@ -610,7 +611,11 @@ impl Simulator {
         let curr_frame = self.sr_entered;
 
         // always do at least one step
-        self.step_in()?;
+        match self.step_in() {
+            Err(SimErr::ProgramHalted) => return Ok(()),
+            r => r?
+        };
+        
         // run until we have landed back in the same frame
         self.run_while(|sim| curr_frame < sim.sr_entered)
     }
@@ -620,7 +625,12 @@ impl Simulator {
         let curr_frame = self.sr_entered;
 
         // always do at least one step
-        self.step_in()?;
+        match self.step_in() {
+            Err(SimErr::ProgramHalted) => return Ok(()),
+            r => r?
+        };
+        
+        // run until we have landed in a smaller frame
         if curr_frame != 0 {
             self.run_while(|sim| curr_frame <= sim.sr_entered)?;
         }
