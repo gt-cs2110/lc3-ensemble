@@ -8,7 +8,6 @@
 //! - [`BiChannelIO`]: The basic implementation for basic IO.
 //! - [`CustomIO`]: A wrapper around custom IO implementations.
 
-use std::io::{stdin, stdout, BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::TryRecvError;
 use std::sync::{mpsc, Arc};
@@ -52,6 +51,11 @@ impl IODevice for NoIO {
     fn close(self) {}
 }
 
+/// [`BiChannelIO::new`] helper, indicating the channel is closed and
+/// no more reads/writes should come from it.
+#[derive(Clone, Copy, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Stop;
+
 /// An IO that reads from one channel and writes to another.
 /// 
 /// This binds the reader channel to the KBSR and KBDR.
@@ -78,14 +82,17 @@ pub struct BiChannelIO {
 impl BiChannelIO {
     /// Creates a new bi-channel IO device with the given reader and writer.
     /// 
-    /// This uses a function to instantiate the reader/writer so that
-    /// reader/writers that use locks do not have to hold their lock
-    /// for excessive amounts of time.
+    /// This calls the reader function every time the IO input receives a byte.
+    /// The reader function should block until a byte is ready, or return Stop
+    /// if there are no more bytes to read.
     /// 
-    /// Note that the writer flushes every character.
-    pub fn new<R: BufRead, W: Write>(
-        mut reader: impl FnMut() -> R + Send + 'static, 
-        mut writer: impl FnMut() -> W + Send + 'static, 
+    /// This calls the writer function every time a byte needs to be written to the
+    /// IO output.
+    /// and calls the writer function everytime a byte needs to be written to the
+    /// IO output.
+    pub fn new(
+        mut reader: impl FnMut() -> Result<u8, Stop> + Send + 'static, 
+        mut writer: impl FnMut(u8) -> Result<(), Stop> + Send + 'static, 
         mcr: Arc<AtomicBool>
     ) -> Self {
         let (read_tx, read_rx) = mpsc::sync_channel(1);
@@ -98,30 +105,21 @@ impl BiChannelIO {
 
         // Reader thread:
         let read_handler = std::thread::spawn(move || loop {
-            let buf = reader().fill_buf().unwrap().to_vec();
-            for byte in buf {
-                let result = read_tx.send(byte);
-                readst.store(true, Ordering::Relaxed);
-                
-                match result {
-                    Ok(()) => reader().consume(1),
-                    Err(_) => return,
-                }
-            }
+            let Ok(byte) = reader() else { return };
+            
+            let result = read_tx.send(byte);
+            readst.store(true, Ordering::Relaxed);
+
+            let Ok(()) = result else { return };
         });
 
         // Writer thread:
-        let write_handler = std::thread::spawn(move || loop {
-            writest.store(true, Ordering::Relaxed); // ready to receive
-            let result = write_rx.recv();
-            writest.store(false, Ordering::Relaxed); // no receiving while processing results
-
-            match result {
-                Ok(byte) => {
-                    writer().write_all(&[byte]).unwrap();
-                    writer().flush().unwrap();
-                },
-                Err(_) => return, // after a disconnect, this doesn't need to do anything
+        let write_handler = std::thread::spawn(move || {
+            writest.store(true, Ordering::Relaxed);
+            for byte in write_rx {
+                writest.store(false, Ordering::Relaxed); // no receiving while processing results
+                let Ok(()) = writer(byte) else { return };
+                writest.store(true, Ordering::Relaxed); // ready to receive
             }
         });
         
@@ -139,10 +137,30 @@ impl BiChannelIO {
     /// Creates a bi-channel IO device with stdin being the read data and stdout being the write data.
     /// 
     /// Note that due to how stdin works in terminals, data is only sent once a new line is typed.
+    /// Additionally, this flushes stdout every time a byte is written.
     pub fn stdio(mcr: Arc<AtomicBool>) -> Self {
-        Self::new(|| stdin().lock(), stdout, mcr)
+        use std::io::{self, BufRead, Write};
+
+        Self::new(
+            || {
+                let mut stdin = io::stdin().lock();
+                let &[byte, ..] = stdin.fill_buf().unwrap() else {
+                    // terminal stdin would poll, so this is unreachable with terminal stdin
+                    return Err(Stop);
+                };
+
+                Ok(byte)
+            }, 
+            |byte| {
+                io::stdout().write_all(&[byte]).unwrap();
+                io::stdout().flush().unwrap();
+                Ok(())
+            }, 
+            mcr
+        )
     }
 }
+
 impl IODevice for BiChannelIO {
     fn io_read(&self, addr: u16) -> Option<u16> {
         match addr {
