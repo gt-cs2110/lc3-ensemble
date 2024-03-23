@@ -332,7 +332,7 @@ impl SourceInfo {
     pub fn get_pos_pair(&self, index: usize) -> (usize, usize) {
         let lno = self.nl_indices.partition_point(|&start| start < index);
 
-        let Range { start: lstart, .. } = self.raw_line_span(index)
+        let Range { start: lstart, .. } = self.raw_line_span(lno)
             .or_else(|| self.raw_line_span(self.nl_indices.len()))
             .unwrap_or(0..0);
         let cno = index - lstart;
