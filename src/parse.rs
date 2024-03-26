@@ -259,7 +259,7 @@ impl<OFF, const N: u32> Parse for PCOffset<OFF, N>
 /// This module holds components that are very simple to parse
 /// (defined as only requiring a single token and no additional state from the parser).
 /// 
-/// The key type of this module is the [`SimpleParse`] module which defines
+/// The key type of this module is the [`TokenParse`] trait which defines
 /// how to "simply parse" a component. 
 /// See that trait for more details about its utility over [`Parse`].
 /// 
