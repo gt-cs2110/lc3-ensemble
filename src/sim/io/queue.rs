@@ -99,7 +99,7 @@ impl<T> BlockingQueue<T> {
     /// 
     /// [`BiChannelIO`]: super::BiChannelIO
     /// [`BiChannelIO::new`]: super::BiChannelIO::new
-    pub fn reader(&self) -> impl FnOnce() -> Result<T, super::Stop> {
+    pub fn reader(&self) -> impl Fn() -> Result<T, super::Stop> {
         let tail = self.tail();
 
         move || tail.recv().map_err(|_| super::Stop)
