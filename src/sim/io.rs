@@ -4,15 +4,19 @@
 //! This is exposed to the simulator with the [`SimIO`] enum.
 //! 
 //! Besides those two key items, this module also includes:
-//! - [`EmptyIO`]: The implementation for a lack of IO support.
-//! - [`BiChannelIO`]: The basic implementation for basic IO.
-//! - [`CustomIO`]: A wrapper around custom IO implementations.
+//! - [`EmptyIO`]: An `IODevice` holding the implementation for a lack of IO support.
+//! - [`BiChannelIO`]: An `IODevice` holding a basic implementation for IO.
+//! - [`CustomIO`]: An `IODevice` that can be used to wrap around custom IO implementations.
+//! - [`BlockingQueue`]: Not an `IODevice`, but a utility data structure that can be used as an input buffer.
+
+mod queue;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use crossbeam_channel as cbc;
+pub use queue::*;
 
 const KBSR: u16 = 0xFE00;
 const KBDR: u16 = 0xFE02;
