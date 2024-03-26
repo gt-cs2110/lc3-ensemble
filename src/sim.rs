@@ -129,9 +129,7 @@ pub struct Simulator {
 
     /// IO handler for the simulator.
     /// 
-    /// This is an Option because it is only enabled when the OS is active.
-    /// It is also an Option so that closing it (via [`Simulator::close_io`]) 
-    /// does not require closing the entire Simulator.
+    /// This is used alongside [`Simulator::mem_ctx`] to handle memory accesses.
     pub io: SimIO,
 
     /// Machine control.
@@ -182,7 +180,7 @@ impl Simulator {
             saved_sp: Word::new_init(0x3000),
             sr_entered: 0,
             strict: false,
-            io: SimIO::from(NoIO),
+            io: SimIO::from(EmptyIO),
             alloca: Box::new([]),
             mcr: Arc::default(),
             breakpoints: vec![],
@@ -235,7 +233,7 @@ impl Simulator {
 
     /// Closes the IO handler, waiting for it to close.
     pub fn close_io(&mut self) {
-        self.open_io(NoIO) // the illusion of choice
+        self.open_io(EmptyIO) // the illusion of choice
     }
     
     /// Loads an object file into this simulator.

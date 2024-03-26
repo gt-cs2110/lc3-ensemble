@@ -4,7 +4,7 @@
 //! This is exposed to the simulator with the [`SimIO`] enum.
 //! 
 //! Besides those two key items, this module also includes:
-//! - [`NoIO`]: The implementation for no IO.
+//! - [`EmptyIO`]: The implementation for a lack of IO support.
 //! - [`BiChannelIO`]: The basic implementation for basic IO.
 //! - [`CustomIO`]: A wrapper around custom IO implementations.
 
@@ -39,8 +39,11 @@ pub trait IODevice {
 impl dyn IODevice {} // assert IODevice is dyn safe
 
 /// No IO. All reads and writes are unsuccessful.
-pub struct NoIO;
-impl IODevice for NoIO {
+/// 
+/// If IO status registers are accessed while this is the active IO type, 
+/// all IO-related traps will hang.
+pub struct EmptyIO;
+impl IODevice for EmptyIO {
     fn io_read(&self, _addr: u16) -> Option<u16> {
         None
     }
@@ -52,8 +55,8 @@ impl IODevice for NoIO {
     fn close(self) {}
 }
 
-/// [`BiChannelIO::new`] helper, indicating the channel is closed and
-/// no more reads/writes should come from it.
+/// A helper struct for [`BiChannelIO::new`], 
+/// indicating the channel is closed and no more reads/writes will come from it.
 #[derive(Clone, Copy, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Stop;
 
@@ -103,8 +106,7 @@ impl BiChannelIO {
         // Reader thread:
         let read_handler = std::thread::spawn(move || loop {
             let Ok(byte) = reader() else { return };
-            let result = read_tx.send(byte);
-            let Ok(()) = result else { return };
+            let Ok(()) = read_tx.send(byte) else { return };
         });
 
         // Writer thread:
@@ -272,8 +274,8 @@ impl IODevice for CustomIO {
 
 /// All the variants of IO accepted by the Simulator.
 pub enum SimIO {
-    /// No IO. This corresponds to the implementation of [`NoIO`].
-    None,
+    /// No IO. This corresponds to the implementation of [`EmptyIO`].
+    Empty,
     /// A bi-channel IO implementation. See [`BiChannelIO`].
     BiChannel(BiChannelIO),
     /// A custom IO implementation. See [`CustomIO`].
@@ -285,9 +287,9 @@ impl std::fmt::Debug for SimIO {
             .finish_non_exhaustive()
     }
 }
-impl From<NoIO> for SimIO {
-    fn from(_value: NoIO) -> Self {
-        SimIO::None
+impl From<EmptyIO> for SimIO {
+    fn from(_value: EmptyIO) -> Self {
+        SimIO::Empty
     }
 }
 impl From<BiChannelIO> for SimIO {
@@ -303,7 +305,7 @@ impl From<CustomIO> for SimIO {
 impl IODevice for SimIO {
     fn io_read(&self, addr: u16) -> Option<u16> {
         match self {
-            SimIO::None => NoIO.io_read(addr),
+            SimIO::Empty => EmptyIO.io_read(addr),
             SimIO::BiChannel(io) => io.io_read(addr),
             SimIO::Custom(io) => io.io_read(addr)
         }
@@ -311,7 +313,7 @@ impl IODevice for SimIO {
 
     fn io_write(&self, addr: u16, data: u16) -> bool {
         match self {
-            SimIO::None => NoIO.io_write(addr, data),
+            SimIO::Empty => EmptyIO.io_write(addr, data),
             SimIO::BiChannel(io) => io.io_write(addr, data),
             SimIO::Custom(io) => io.io_write(addr, data)
         }
@@ -319,7 +321,7 @@ impl IODevice for SimIO {
 
     fn close(self) {
         match self {
-            SimIO::None => NoIO.close(),
+            SimIO::Empty => EmptyIO.close(),
             SimIO::BiChannel(io) => io.close(),
             SimIO::Custom(io) => io.close()
         }
