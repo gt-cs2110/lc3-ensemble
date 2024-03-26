@@ -3,7 +3,6 @@
 //! The key type here is [`Breakpoint`], which can be appended to the [`Simulator`]'s
 //! breakpoint field to cause the simulator to break.
 use std::fmt::Write;
-use std::sync::Mutex;
 
 use crate::ast::Reg;
 
@@ -58,12 +57,12 @@ pub enum Breakpoint {
 }
 
 impl Breakpoint where Breakpoint: Send + Sync { /* assert Breakpoint is send/sync */ }
-type BreakpointFn = Mutex<Box<dyn FnMut(&Simulator) -> bool + Send + 'static>>;
+type BreakpointFn = Box<dyn Fn(&Simulator) -> bool + Send + Sync + 'static>;
 
 impl Breakpoint {
     /// Creates a breakpoint out of a function.
-    pub fn generic(f: impl FnMut(&Simulator) -> bool + Send + 'static) -> Breakpoint {
-        Breakpoint::Generic(Mutex::new(Box::new(f)))
+    pub fn generic(f: impl Fn(&Simulator) -> bool + Send + Sync + 'static) -> Breakpoint {
+        Breakpoint::Generic(Box::new(f))
     }
 
     /// Checks if a break should occur.
@@ -72,7 +71,7 @@ impl Breakpoint {
             Breakpoint::PC(cmp) => cmp.check(sim.pc),
             Breakpoint::Reg { reg, value: cmp } => cmp.check(sim.reg_file[*reg].get()),
             Breakpoint::Mem { addr, value: cmp } => cmp.check(sim.mem.0[*addr as usize].get()), // this is not using mem's get because we don't want to trigger an IO read
-            Breakpoint::Generic(pred) => (pred.lock().unwrap())(sim),
+            Breakpoint::Generic(pred) => (pred)(sim),
             Breakpoint::And([l, r]) => l.check(sim) && r.check(sim),
             Breakpoint::Or([l, r]) => l.check(sim) || r.check(sim),
         }
