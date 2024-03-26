@@ -62,7 +62,7 @@ impl ObjectFile {
         }
 
         if let Some(sym) = &self.sym {
-            for (label, &(addr, span_start)) in sym.labels.iter() {
+            for (label, &(addr, span_start)) in sym.label_map.iter() {
                 bytes.push(0x01);
                 bytes.extend(u16::to_le_bytes(addr));
                 bytes.extend(u64::to_le_bytes(span_start as u64));
@@ -70,16 +70,16 @@ impl ObjectFile {
                 bytes.extend_from_slice(label.as_bytes());
             }
 
-            if let Some(src) = &sym.src_info {
-                for (lno, data) in src.line_table.0.iter() {
-                    bytes.push(0x02);
-                    bytes.extend(u64::to_le_bytes(*lno as u64));
-                    bytes.extend(u16::to_le_bytes(data.len() as u16));
-                    for &word in data {
-                        bytes.extend(u16::to_le_bytes(word));
-                    }
+            for (lno, data) in sym.line_map.0.iter() {
+                bytes.push(0x02);
+                bytes.extend(u64::to_le_bytes(*lno as u64));
+                bytes.extend(u16::to_le_bytes(data.len() as u16));
+                for &word in data {
+                    bytes.extend(u16::to_le_bytes(word));
                 }
+            }
 
+            if let Some(src) = &sym.src_info {
                 bytes.push(0x03);
                 bytes.extend(u64::to_le_bytes(src.nl_indices.len() as u64));
                 for &index in &src.nl_indices {
@@ -95,10 +95,10 @@ impl ObjectFile {
     /// Reads a byte slice back into object file information,
     /// returning None if a parsing error occurs.
     pub fn read_bytes(mut vec: &[u8]) -> Option<ObjectFile> {
-        let mut block_map    = BTreeMap::new();
-        let mut label_table  = HashMap::new();
-        let mut line_table   = vec![];
-        let mut line_indices = None;
+        let mut block_map  = BTreeMap::new();
+        let mut label_map  = HashMap::new();
+        let mut line_map   = vec![];
+        let mut nl_indices = None;
         let mut src = None;
 
         while !vec.is_empty() {
@@ -125,17 +125,17 @@ impl ObjectFile {
                     let str_len    = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
                     let string     = String::from_utf8(take_slice(&mut vec, str_len)?.to_vec()).ok()?;
 
-                    label_table.insert(string, (addr, span_start));
+                    label_map.insert(string, (addr, span_start));
                 },
                 0x02 => {
                     let lno      = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
                     let data_len = u16::from_le_bytes(take::<2>(&mut vec)?);
                     let data     = map_chunks::<_, 2>(take_slice(&mut vec, 2 * usize::from(data_len))?, u16::from_le_bytes);
                     
-                    line_table.push((lno, data));
+                    line_map.push((lno, data));
                 },
                 0x03 => {
-                    let ref_li  = line_indices.get_or_insert(vec![]);
+                    let ref_li  = nl_indices.get_or_insert(vec![]);
                     let ref_src = src.get_or_insert(String::new());
 
                     let li_len = u64::from_le_bytes(take::<8>(&mut vec)?) as usize;
@@ -150,17 +150,17 @@ impl ObjectFile {
             }
         }
 
-        let sym = match !label_table.is_empty() || !line_table.is_empty() || line_indices.is_some() {
+        let sym = match !label_map.is_empty() || !line_map.is_empty() || nl_indices.is_some() {
             true => Some(SymbolTable {
-                labels: label_table,
-                src_info: match !line_table.is_empty() || line_indices.is_some() {
+                label_map,
+                src_info: match !line_map.is_empty() || nl_indices.is_some() {
                     true  => Some(super::SourceInfo {
                         src: src?, 
-                        nl_indices: line_indices?,
-                        line_table: super::LineSymbolTable(line_table)
+                        nl_indices: nl_indices?,
                     }),
                     false => None,
                 },
+                line_map: super::LineSymbolMap(line_map)
             }),
             false => None,
         };

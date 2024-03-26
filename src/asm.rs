@@ -179,8 +179,11 @@ impl crate::err::Error for AsmErr {
     }
 }
 
-struct LineSymbolTable(Vec<(usize, Vec<u16>)>);
-impl LineSymbolTable {
+/// A symbol table that maps source line numbers to memory addresses.
+struct LineSymbolMap(Vec<(usize, Vec<u16>)>);
+
+impl LineSymbolMap {
+    /// Creates a new line symbol table.
     fn new(lines: Vec<Option<u16>>) -> Self {
         let mut blocks = vec![];
         let mut current = None;
@@ -195,6 +198,8 @@ impl LineSymbolTable {
 
         Self(blocks)
     }
+
+    /// Gets the memory address associated with this line, if it is present in the symbol table.
     fn get(&self, line: usize) -> Option<u16> {
         use std::cmp::Ordering;
 
@@ -211,6 +216,8 @@ impl LineSymbolTable {
         let (start, block) = &self.0[index];
         block.get(line - *start).copied()
     }
+
+    /// Gets the source line number associated with this memory address, if it is present in the symbol table.
     fn find(&self, addr: u16) -> Option<usize> {
         self.0.iter()
             .find_map(|(start, words)| {
@@ -219,6 +226,8 @@ impl LineSymbolTable {
                     .map(|o| start + o)
             })
     }
+
+    /// Gets an iterable representing the mapping of line numbers to addresses.
     fn iter(&self) -> impl Iterator<Item=(usize, u16)> + '_ {
         self.0.iter()
             .flat_map(|(i, words)| {
@@ -233,48 +242,18 @@ impl LineSymbolTable {
 pub struct SourceInfo {
     /// The source code.
     src: String,
-    /// Where each new line is in source code.
-    nl_indices: Vec<usize>,
-    /// A mapping from each line with a statement in the source to an address.
-    line_table: LineSymbolTable
+    /// The index of each new line in source code.
+    nl_indices: Vec<usize>
 }
 impl std::fmt::Debug for SourceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use std::cell::Cell;
-
-        #[repr(transparent)]
-        struct Addr(u16);
-        impl std::fmt::Debug for Addr {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "x{:04X}", self.0)
-            }
-        }
-
-        struct Map<M>(Cell<Option<M>>);
-        impl<M> Map<M> {
-            fn new(m: M) -> Self {
-                Map(Cell::new(Some(m)))
-            }
-        }
-        impl<K: std::fmt::Debug, V: std::fmt::Debug, M: IntoIterator<Item=(K, V)>> std::fmt::Debug for Map<M> {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.debug_map()
-                    .entries(self.0.take().unwrap())
-                    .finish()
-            }
-        }
-
         f.debug_struct("SourceInfo")
             .field("nl_indices", &self.nl_indices)
-            .field("line_table", &Map::new({
-                self.line_table.iter()
-                    .map(|(i, v)| (i, Addr(v)))
-            }))
             .finish_non_exhaustive()
     }
 }
 impl SourceInfo {
-    /// Reads the entire source.
+    /// Returns the entire source.
     pub fn source(&self) -> &str {
         &self.src
     }
@@ -341,20 +320,33 @@ impl SourceInfo {
 }
 
 /// The symbol table created in the first assembler pass
-/// that maps each label to its corresponding address.
+/// that encodes source code mappings to memory addresses in the object file.
+/// 
+/// The symbol table consists of: 
+/// - A mapping from source code labels to memory addresses.
+/// - A mapping from source code line numbers to memory addresses (if debug symbols are enabled, see [`SymbolTable::new`]).
+/// - The source text (if debug symbols are enabled, see [`SymbolTable::new`]).
 pub struct SymbolTable {
     /// A mapping from label to address and span of the label.
-    labels: HashMap<String, (u16, usize)>,
-    
+    label_map: HashMap<String, (u16, usize)>,
+
+    /// A mapping from each line with a statement in the source to an address.
+    line_map: LineSymbolMap,
+
     /// Information about the source.
-    src_info: Option<SourceInfo>
+    src_info: Option<SourceInfo>,
 }
 
 impl SymbolTable {
-    /// Creates a new symbol table (performing the first assembler pass)
-    /// by reading through the statements and computing label addresses.
+    /// Creates a new symbol table.
     /// 
-    /// If a src argument is provided, this also computes the mapping from source lines to word location.
+    /// This performs the first assembler pass, calculating the memory address of
+    /// labels at each provided statement.
+    /// 
+    /// If a `src` argument is provided, this also computes debug symbols and includes them
+    /// within this `SymbolTable` struct. These debug symbols include:
+    /// - Mappings from source code line numbers to memory addresses
+    /// - Source code text (and more detailed calculations with source code, see [`SourceInfo`] for more details)
     pub fn new(stmts: &[Stmt], src: Option<&str>) -> Result<Self, AsmErr> {
         struct Cursor {
             // The current location counter.
@@ -379,7 +371,7 @@ impl SymbolTable {
         }
 
         // Index where each new line appears.
-        let line_indices: Vec<_> = src.unwrap_or("")
+        let nl_indices: Vec<_> = src.unwrap_or("")
             .match_indices('\n')
             .map(|(i, _)| i)
             .collect();
@@ -387,7 +379,7 @@ impl SymbolTable {
         let mut lc: Option<Cursor> = None;
         let mut labels: HashMap<String, (u16, Span)> = HashMap::new();
         let mut lines = vec![];
-        lines.resize(line_indices.len() + 1, None);
+        lines.resize(nl_indices.len() + 1, None);
 
         for stmt in stmts {
             // Add labels if they exist
@@ -429,7 +421,7 @@ impl SymbolTable {
                 if src.is_some() {
                     // Calculate line index and put it in self.lines.
                     if !matches!(stmt.nucleus, StmtKind::Directive(Directive::Orig(_) | Directive::End)) {
-                        let line_index = line_indices.partition_point(|&start| start < stmt.span.start);
+                        let line_index = nl_indices.partition_point(|&start| start < stmt.span.start);
                         lines[line_index].replace(cur.lc);
                     }
                 }
@@ -445,11 +437,11 @@ impl SymbolTable {
 
         match lc {
             None => Ok(SymbolTable {
-                labels: labels.into_iter().map(|(k, (addr, span))| (k, (addr, span.start))).collect(),
+                label_map: labels.into_iter().map(|(k, (addr, span))| (k, (addr, span.start))).collect(),
+                line_map: LineSymbolMap::new(lines),
                 src_info: src.map(|s| SourceInfo {
                     src: s.to_string(),
-                    nl_indices: line_indices,
-                    line_table: LineSymbolTable::new(lines),
+                    nl_indices,
                 })
             }),
             Some(cur) => Err(AsmErr::new(AsmErrKind::UnclosedOrig, cur.block_orig)),
@@ -458,35 +450,39 @@ impl SymbolTable {
 
     /// Gets the memory address of a given label (if it exists).
     pub fn get_label(&self, label: &str) -> Option<u16> {
-        self.labels.get(&label.to_uppercase()).map(|&(addr, _)| addr)
+        self.label_map.get(&label.to_uppercase()).map(|&(addr, _)| addr)
     }
 
     /// Gets the source span of a given label (if it exists).
     pub fn find_label_source(&self, label: &str) -> Option<Range<usize>> {
-        let &(_, start) = self.labels.get(label)?;
+        let &(_, start) = self.label_map.get(label)?;
         Some(start..(start + label.len()))
     }
 
     /// Gets an iterable of the mapping from labels to addresses.
     pub fn label_iter(&self) -> impl Iterator<Item=(&str, u16)> + '_ {
-        self.labels.iter()
+        self.label_map.iter()
             .map(|(label, &(addr, _))| (&**label, addr))
     }
 
     /// Gets the address of a given source line.
+    /// 
+    /// This function requires debug symbols to be enabled.
     pub fn get_line(&self, line: usize) -> Option<u16> {
-        self.src_info.as_ref()?.line_table.get(line)
+        self.line_map.get(line)
     }
 
     /// Gets the source line of a given memory address (if it exists.)
     /// 
-    /// This can be converted into a source span (range of characters encompassed by the instruction)
+    /// The result can be converted into a source span (range of characters encompassed by the instruction)
     /// using [`SymbolTable::source_info`] and [`SourceInfo::line_span`].
+    /// 
+    /// This function requires debug symbols to be enabled.
     pub fn find_line_source(&self, addr: u16) -> Option<usize> {
-        self.src_info.as_ref()?.line_table.find(addr)
+        self.line_map.find(addr)
     }
 
-    /// Reads the source info from this symbol table (if it exists).
+    /// Reads the source info from this symbol table (if it debug symbols are enabled).
     pub fn source_info(&self) -> Option<&SourceInfo> {
         self.src_info.as_ref()
     }
@@ -518,9 +514,13 @@ impl std::fmt::Debug for SymbolTable {
         }
 
         f.debug_struct("SymbolTable")
-            .field("labels", &Map::new({
-                self.labels.iter()
+            .field("label_map", &Map::new({
+                self.label_map.iter()
                     .map(|(k, &(addr, start))| (k, (Addr(addr), start..(start + k.len()))))
+            }))
+            .field("line_map", &Map::new({
+                self.line_map.iter()
+                    .map(|(i, v)| (i, Addr(v)))
             }))
             .field("source_info", &self.src_info)
             .finish()
