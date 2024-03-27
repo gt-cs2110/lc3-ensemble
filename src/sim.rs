@@ -294,10 +294,11 @@ impl Simulator {
     /// Sets the PC to the given address, raising any errors that occur.
     /// 
     /// The `st_check_mem` parameter indicates whether the data at the PC should be verified in strict mode.
-    /// This should be enabled in most circumstances (e.g., when it is set with JMP or JSR).
+    /// This should be enabled when it is absolutely known that the PC will read from the provided address
+    /// on the next cycle.
     /// 
-    /// Notably, one time where the parameter is not set is when the PC is incremented every cycle, 
-    /// because it is not known whether that data will ever be read by the PC.
+    /// This should be true when this function is used for instructions like `BR` and `JSR` 
+    /// and should be false when this function is used to increment PC during fetch.
     pub fn set_pc(&mut self, addr_word: Word, st_check_mem: bool) -> Result<(), SimErr> {
         let addr = addr_word.assert_init(self.strict, SimErr::StrictJmpAddrUninit)?.get();
         if self.strict && st_check_mem {
