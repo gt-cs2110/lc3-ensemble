@@ -409,7 +409,7 @@ impl Simulator {
         // 2. the tripwire condition returns false
         // 3. any of the breakpoints are hit
         while self.mcr.load(Ordering::Relaxed) && tripwire(self) {
-            match self.step_in() {
+            match self.step() {
                 Ok(_) => {},
                 Err(SimErr::ProgramHalted) => break,
                 Err(e) => {
@@ -434,8 +434,13 @@ impl Simulator {
         self.run_while(|_| true)
     }
     
-    /// Perform one step through the simulator's execution.
-    pub fn step_in(&mut self) -> Result<(), SimErr> {
+    /// Simulate one step, executing one instruction.
+    /// 
+    /// This function is a library function and should be used when one step is needed.
+    /// The difference between this function and [`Simulator::step_in`] is that this
+    /// function can return [`SimErr::ProgramHalted`] as an error,
+    /// whereas `step_in` will ignore `ProgramHalted` errors.
+    fn step(&mut self) -> Result<(), SimErr> {
         self.prefetch = true;
         let word = self.mem.get(self.pc, self.default_mem_ctx())?
             .assert_init(self.strict, SimErr::StrictPCCurrUninit)?
@@ -603,12 +608,20 @@ impl Simulator {
         Ok(())
     }
 
-    /// Perform one step through the simulator's execution, treating complete subroutines as one step.
+    /// Simulate one step, executing one instruction.
+    pub fn step_in(&mut self) -> Result<(), SimErr> {
+        match self.step() {
+            Err(SimErr::ProgramHalted) => Ok(()),
+            r => r
+        }
+    }
+
+    /// Simulate one step, executing one instruction and running through entire subroutines as a single step.
     pub fn step_over(&mut self) -> Result<(), SimErr> {
         let curr_frame = self.sr_entered;
 
         // always do at least one step
-        match self.step_in() {
+        match self.step() {
             Err(SimErr::ProgramHalted) => return Ok(()),
             r => r?
         };
@@ -622,7 +635,7 @@ impl Simulator {
         let curr_frame = self.sr_entered;
 
         // always do at least one step
-        match self.step_in() {
+        match self.step() {
             Err(SimErr::ProgramHalted) => return Ok(()),
             r => r?
         };
