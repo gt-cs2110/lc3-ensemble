@@ -163,7 +163,10 @@ pub struct Simulator {
     prefetch: bool,
 
     /// Indicates whether the last execution hit a breakpoint.
-    hit_breakpoint: bool
+    hit_breakpoint: bool,
+
+    /// Indicates whether the OS has been loaded.
+    os_loaded: bool
 }
 
 impl Simulator {
@@ -185,28 +188,26 @@ impl Simulator {
             mcr: Arc::default(),
             breakpoints: vec![],
             prefetch: false,
-            hit_breakpoint: false
+            hit_breakpoint: false,
+            os_loaded: false
         }
-    }
-    /// Creates a new simulator that is completely zeroed out.
-    pub fn zeroed() -> Self {
-        Self::create_with(
-            Mem::zeroed,
-            RegFile::zeroed
-        )
     }
     /// Creates a new simulator, with randomized memory 
     /// and with the OS loaded, but without a loaded object file.
     pub fn new() -> Self {
-        let mut sim = Self::create_with(
-            Mem::new,
-            RegFile::new
-        );
+        let mut sim = Self::create_with(Mem::new, RegFile::new);
         sim.load_os();
         sim
     }
+    /// Creates a new simulator that is completely zeroed out.
+    pub fn zeroed() -> Self {
+        Self::create_with(Mem::zeroed, RegFile::zeroed)
+    }
 
     /// Loads and initializes the operating system.
+    /// 
+    /// This is done automatically with [`Simulator::new`], but
+    /// not with [`Simulator::zeroed`].
     /// 
     /// This will initialize kernel space and create trap handlers,
     /// however it will not load working IO. This can cause IO
@@ -217,12 +218,20 @@ impl Simulator {
     pub fn load_os(&mut self) {
         use crate::parse::parse_ast;
         use crate::asm::assemble;
+        use std::sync::OnceLock;
 
-        let os_file = include_str!("os.asm");
-        let ast = parse_ast(os_file).unwrap();
-        let obj = assemble(ast).unwrap();
-
-        self.load_obj_file(&obj);
+        static OS_OBJ_FILE: OnceLock<ObjectFile> = OnceLock::new();
+        
+        if !self.os_loaded {
+            let obj = OS_OBJ_FILE.get_or_init(|| {
+                let os_file = include_str!("os.asm");
+                let ast = parse_ast(os_file).unwrap();
+                assemble(ast).unwrap()
+            });
+    
+            self.load_obj_file(obj);
+            self.os_loaded = true;
+        }
     }
     
     /// Sets and initializes the IO handler.
@@ -263,10 +272,6 @@ impl Simulator {
         alloca.sort_by_key(|&(start, _)| start);
         self.alloca = alloca.into_boxed_slice();
     }
-    /// Wipes the simulator's state.
-    pub fn clear(&mut self) {
-        std::mem::take(self);
-    }
 
     /// Sets the condition codes using the provided result.
     fn set_cc(&mut self, result: u16) {
@@ -279,11 +284,16 @@ impl Simulator {
 
     /// Gets a reference to the PSR.
     pub fn psr(&self) -> &PSR {
+        // This is not mutable because editing the PSR can cause crashes to occur if
+        // privilege is tampered with during an interrupt.
         &self.psr
     }
 
     /// Gets a reference to the MCR.
     pub fn mcr(&self) -> &Arc<AtomicBool> {
+        // The mcr field is not exposed because that allows someone to swap the MCR
+        // with another AtomicBool, which would cause the simulator's MCR
+        // to be inconsistent with any other component's 
         &self.mcr
     }
 
@@ -311,20 +321,20 @@ impl Simulator {
     pub fn offset_pc(&mut self, offset: i16, st_check_mem: bool) -> Result<(), SimErr> {
         self.set_pc(Word::from(self.pc.wrapping_add_signed(offset)), st_check_mem)
     }
-    /// Gets the value of the PC before fetch increments it.
+    /// Gets the value of the prefetch PC.
     /// 
-    /// This function provides the prefetch PC, which is
-    /// the location of the currently executing instruction in memory.
+    /// This function returns the value of PC before it is incremented druing fetch,
+    /// which is also the location of the currently executing instruction in memory.
     /// 
-    /// This is useful for error handling, as computing which instruction
-    /// in source is linked to the simulator's PC after an error requires
-    /// knowing whether the PC was prefetch or postfetch.
+    /// This is useful for pointing to a given memory location in error handling,
+    /// as this computation always points to the memory location of the instruction.
     pub fn prefetch_pc(&self) -> u16 {
         self.pc - (!self.prefetch) as u16
     }
 
-    /// Checks whether address is in allocated user space
-    pub fn in_alloca(&self, addr: u16) -> bool {
+    /// Checks whether the address points to a memory location that was allocated
+    /// in the currently loaded object file.
+    fn in_alloca(&self, addr: u16) -> bool {
         let first_post = self.alloca.partition_point(|&(start, _)| start <= addr);
         if first_post == 0 { return false };
         
@@ -364,7 +374,7 @@ impl Simulator {
     /// 
     /// The address provided is the address into the jump table (either the trap or interrupt vector ones).
     /// This function will always jump to `mem[vect]` at the end of this function.
-    pub fn handle_interrupt(&mut self, vect: u16, priority: Option<u8>) -> Result<(), SimErr> {
+    fn handle_interrupt(&mut self, vect: u16, priority: Option<u8>) -> Result<(), SimErr> {
         if priority.is_some_and(|prio| prio <= self.psr.priority()) { return Ok(()) };
         if vect == 0x25 /* HALT */ {
             self.offset_pc(-1, false)?; // decrement PC so that execution goes back here
@@ -398,7 +408,7 @@ impl Simulator {
         self.set_pc(addr, true)
     }
 
-    /// Runs until the condition returns false (or any of the typical breaks occur)
+    /// Runs until the tripwire condition returns false (or any of the typical breaks occur)
     fn run_while(&mut self, mut tripwire: impl FnMut(&mut Simulator) -> bool) -> Result<(), SimErr> {
         use std::sync::atomic::Ordering;
 
