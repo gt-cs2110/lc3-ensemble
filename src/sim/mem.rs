@@ -7,7 +7,7 @@
 
 use crate::ast::Reg;
 
-use super::{IODevice, SimErr};
+use super::{IODevice, SimErr, SimIO};
 
 /// A memory location that can be read and written to.
 /// 
@@ -277,37 +277,39 @@ impl AssertInit for Word {
 /// Context behind a memory access.
 /// 
 /// This struct is used by [`Mem::get`] and [`Mem::set`] to perform checks against memory accesses.
-/// It can be constructed with [`super::Simulator::mem_ctx`].
+/// A default memory access context for the given simulator can be constructed with [`super::Simulator::default_mem_ctx`].
 #[derive(Clone, Copy)]
-pub struct MemAccessCtx<'ctx> {
+pub struct MemAccessCtx {
     /// Whether this access is privileged (false = user, true = supervisor).
     pub privileged: bool,
     /// Whether writes to memory should follow strict rules 
     /// (no writing partially or fully uninitialized data).
     /// 
     /// This does not affect [`Mem::get`].
-    pub strict: bool,
-    /// Reference to the IO device.
-    pub io: &'ctx super::SimIO
+    pub strict: bool
 }
 
-const N: usize = 2usize.pow(16);
+const N: usize = 1 << 16;
 const IO_START: u16 = 0xFE00;
 const USER_RANGE: std::ops::Range<u16> = 0x3000..0xFE00;
 
 /// Memory. This can be addressed with any `u16`.
 #[derive(Debug)]
-pub struct Mem(pub(super) Box<[Word; N]>);
+pub struct Mem {
+    pub(super) data: Box<[Word; N]>,
+    pub(super) io: SimIO
+}
 impl Mem {
     /// Creates a new memory with a provided initializer.
     fn create_with(initializer: impl FnMut() -> Word) -> Self {
-        Self({
-            std::iter::repeat_with(initializer)
+        Self {
+            data: std::iter::repeat_with(initializer)
                 .take(N)
                 .collect::<Box<_>>()
                 .try_into()
-                .unwrap_or_else(|_| unreachable!("iterator should have had {N} elements"))
-        })
+                .unwrap_or_else(|_| unreachable!("iterator should have had {N} elements")),
+            io: SimIO::Empty
+        }
     }
     /// Creates a new memory with random, uninitialized values.
     pub fn new() -> Self {
@@ -321,7 +323,7 @@ impl Mem {
 
     /// Copies a block into this memory.
     pub fn copy_block(&mut self, start: u16, data: &[Word]) {
-        let mem = &mut self.0;
+        let mem = &mut self.data;
         let end = start.wrapping_add(data.len() as u16);
         if start <= end {
             // contiguous copy
@@ -337,29 +339,43 @@ impl Mem {
     }
 
     /// Fallibly gets the word at the provided index, erroring if not possible.
+    /// 
+    /// This accepts a [`MemAccessCtx`], that describes the parameters of the memory access.
+    /// The simulator provides a default [`MemAccessCtx`] under [`super::Simulator::default_mem_ctx`].
+    /// 
+    /// The flags are used as follows:
+    /// - `privileged`: if false, this access errors if the address is a memory location outside of the user range.
+    /// - `strict`: not used for get
     pub fn get(&mut self, addr: u16, ctx: MemAccessCtx) -> Result<Word, SimErr> {
         if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
 
         if addr >= IO_START {
-            if let Some(new_data) = ctx.io.io_read(addr) {
-                self.0[usize::from(addr)].set(new_data);
+            if let Some(new_data) = self.io.io_read(addr) {
+                self.data[usize::from(addr)].set(new_data);
             }
         }
-        Ok(self.0[usize::from(addr)])
+        Ok(self.data[usize::from(addr)])
     }
     /// Fallibly attempts to set at the provided index, erroring if not possible.
+    /// 
+    /// This accepts a [`MemAccessCtx`], that describes the parameters of the memory access.
+    /// The simulator provides a default [`MemAccessCtx`] under [`super::Simulator::default_mem_ctx`].
+    /// 
+    /// The flags are used as follows:
+    /// - `privileged`: if false, this access errors if the address is a memory location outside of the user range.
+    /// - `strict`: If true, all accesses that would cause a memory location to be set with uninitialized data causes an error.
     pub fn set(&mut self, addr: u16, data: Word, ctx: MemAccessCtx) -> Result<(), SimErr> {
         if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
         
         let write_to_mem = if addr >= IO_START {
             let io_data = data.assert_init(ctx.strict, SimErr::StrictIOSetUninit)?
                 .get();
-            ctx.io.io_write(addr, io_data)
+            self.io.io_write(addr, io_data)
         } else {
             true
         };
         if write_to_mem {
-            self.0[usize::from(addr)]
+            self.data[usize::from(addr)]
                 .copy_word(data, ctx.strict, SimErr::StrictMemSetUninit)?;
         }
         Ok(())

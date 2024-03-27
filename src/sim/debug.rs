@@ -70,7 +70,7 @@ impl Breakpoint {
         match self {
             Breakpoint::PC(cmp) => cmp.check(sim.pc),
             Breakpoint::Reg { reg, value: cmp } => cmp.check(sim.reg_file[*reg].get()),
-            Breakpoint::Mem { addr, value: cmp } => cmp.check(sim.mem.0[*addr as usize].get()), // this is not using mem's get because we don't want to trigger an IO read
+            Breakpoint::Mem { addr, value: cmp } => cmp.check(sim.mem.data[*addr as usize].get()), // this is not using mem's get because we don't want to trigger an IO read
             Breakpoint::Generic(pred) => (pred)(sim),
             Breakpoint::And([l, r]) => l.check(sim) && r.check(sim),
             Breakpoint::Or([l, r]) => l.check(sim) || r.check(sim),
