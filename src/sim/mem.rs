@@ -276,7 +276,7 @@ impl AssertInit for Word {
 
 /// Context behind a memory access.
 /// 
-/// This struct is used by [`Mem::get`] and [`Mem::set`] to perform checks against memory accesses.
+/// This struct is used by [`Mem::read`] and [`Mem::write`] to perform checks against memory accesses.
 /// A default memory access context for the given simulator can be constructed with [`super::Simulator::default_mem_ctx`].
 #[derive(Clone, Copy)]
 pub struct MemAccessCtx {
@@ -285,7 +285,7 @@ pub struct MemAccessCtx {
     /// Whether writes to memory should follow strict rules 
     /// (no writing partially or fully uninitialized data).
     /// 
-    /// This does not affect [`Mem::get`].
+    /// This does not affect [`Mem::read`].
     pub strict: bool
 }
 
@@ -338,15 +338,52 @@ impl Mem {
         }
     }
 
-    /// Fallibly gets the word at the provided index, erroring if not possible.
+    /// Gets a reference to a word from the memory's current state.
+    /// 
+    /// This is **only** meant to be used to query the state of the memory,
+    /// not to simulate a read from memory.
+    /// 
+    /// Note the differences from [`Mem::read`]:
+    /// - This function does not trigger IO effects (and as a result, IO values will not be updated).
+    /// - This function does not require [`MemAccessCtx`].
+    /// - This function does not perform access violation checks.
+    /// 
+    /// If any of these effects are necessary (e.g., when trying to execute instructions from the simulator),
+    /// [`Mem::read`] should be used instead.
+    pub fn get_raw(&self, addr: u16) -> &Word {
+        // Mem could implement Index<u16>, but it doesn't as a lint against using this function incorrectly.
+        &self.data[usize::from(addr)]
+    }
+    
+    /// Gets a mutable reference to a word from the memory's current state.
+    /// 
+    /// This is **only** meant to be used to query/edit the state of the memory,
+    /// not to simulate a write from memory.
+    /// 
+    /// Note the differences from [`Mem::write`]:
+    /// - This function does not trigger IO effects (and as a result, IO values will not be updated).
+    /// - This function does not require [`MemAccessCtx`].
+    /// - This function does not perform access violation checks or strict uninitialized memory checking.
+    /// 
+    /// If any of these effects are necessary (e.g., when trying to execute instructions from the simulator),
+    /// [`Mem::write`] should be used instead.
+    pub fn get_raw_mut(&mut self, addr: u16) -> &mut Word {
+        // Mem could implement IndexMut<u16>, but it doesn't as a lint against using this function incorrectly.
+        &mut self.data[usize::from(addr)]
+    }
+
+    /// Fallibly reads the word at the provided index, erroring if not possible.
     /// 
     /// This accepts a [`MemAccessCtx`], that describes the parameters of the memory access.
     /// The simulator provides a default [`MemAccessCtx`] under [`super::Simulator::default_mem_ctx`].
     /// 
     /// The flags are used as follows:
     /// - `privileged`: if false, this access errors if the address is a memory location outside of the user range.
-    /// - `strict`: not used for get
-    pub fn get(&mut self, addr: u16, ctx: MemAccessCtx) -> Result<Word, SimErr> {
+    /// - `strict`: not used for `read`
+    /// 
+    /// Note that this method is used for simulating a read. If you would like to query the memory's state, 
+    /// consider [`Mem::get_raw`].
+    pub fn read(&mut self, addr: u16, ctx: MemAccessCtx) -> Result<Word, SimErr> {
         if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
 
         if addr >= IO_START {
@@ -356,7 +393,8 @@ impl Mem {
         }
         Ok(self.data[usize::from(addr)])
     }
-    /// Fallibly attempts to set at the provided index, erroring if not possible.
+
+    /// Fallibly writes the word at the provided index, erroring if not possible.
     /// 
     /// This accepts a [`MemAccessCtx`], that describes the parameters of the memory access.
     /// The simulator provides a default [`MemAccessCtx`] under [`super::Simulator::default_mem_ctx`].
@@ -364,7 +402,10 @@ impl Mem {
     /// The flags are used as follows:
     /// - `privileged`: if false, this access errors if the address is a memory location outside of the user range.
     /// - `strict`: If true, all accesses that would cause a memory location to be set with uninitialized data causes an error.
-    pub fn set(&mut self, addr: u16, data: Word, ctx: MemAccessCtx) -> Result<(), SimErr> {
+    /// 
+    /// Note that this method is used for simulating a write. If you would like to edit the memory's state, 
+    /// consider [`Mem::get_raw_mut`].
+    pub fn write(&mut self, addr: u16, data: Word, ctx: MemAccessCtx) -> Result<(), SimErr> {
         if !ctx.privileged && !USER_RANGE.contains(&addr) { return Err(SimErr::AccessViolation) };
         
         let write_to_mem = if addr >= IO_START {
