@@ -22,7 +22,6 @@ use crate::ast::asm::{AsmInstr, Directive, Stmt, StmtKind};
 use crate::ast::sim::SimInstr;
 use crate::ast::{IOffset, ImmOrReg, Offset, OffsetNewErr, PCOffset, Reg};
 use crate::err::ErrSpan;
-use crate::sim::mem::Word;
 
 
 /// Assembles a assembly source code AST into an object file.
@@ -621,22 +620,22 @@ struct ObjBlock {
     /// Span of the orig statement.
     orig_span: Range<usize>,
     /// The words in the block.
-    words: Vec<Word>
+    words: Vec<Option<u16>>
 }
 impl ObjBlock {
     fn push(&mut self, data: u16) {
-        self.words.push(Word::new_init(data));
+        self.words.push(Some(data));
     }
     fn shift(&mut self, n: u16) {
         self.words.extend({
-            std::iter::repeat_with(Word::new_uninit)
+            std::iter::repeat(None)
                 .take(usize::from(n))
         });
     }
 }
 impl Extend<u16> for ObjBlock {
     fn extend<T: IntoIterator<Item = u16>>(&mut self, iter: T) {
-        self.words.extend(iter.into_iter().map(Word::new_init));
+        self.words.extend(iter.into_iter().map(Some));
     }
 }
 
@@ -651,7 +650,7 @@ pub struct ObjectFile {
     /// 
     /// Note that the length of a block should fit in a `u16`, so the
     /// block can be a maximum of 65535 words.
-    block_map: BTreeMap<u16, (Vec<Word>, Span)>,
+    block_map: BTreeMap<u16, (Vec<Option<u16>>, Span)>,
 
     /// Debug symbols.
     sym: Option<SymbolTable>
@@ -668,7 +667,7 @@ impl ObjectFile {
     /// Add a new block to the object file, writing the provided words (`words`) at the provided address (`start`).
     /// 
     /// This will error if this block overlaps with another block already present in the object file.
-    pub fn push(&mut self, start: u16, start_span: Range<usize>, words: Vec<Word>) -> Result<(), AsmErr> {
+    pub fn push(&mut self, start: u16, start_span: Range<usize>, words: Vec<Option<u16>>) -> Result<(), AsmErr> {
         // Only add to object file if non-empty:
         if !words.is_empty() {
             // Find previous block and ensure no overlap:
@@ -690,7 +689,7 @@ impl ObjectFile {
     }
 
     /// Get an iterator over all of the blocks of the object file.
-    pub fn iter(&self) -> impl Iterator<Item=(u16, &[Word])> {
+    pub fn iter(&self) -> impl Iterator<Item=(u16, &[Option<u16>])> {
         self.block_map.iter()
             .map(|(&addr, (block, _))| (addr, block.as_slice()))
     }

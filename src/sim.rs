@@ -22,7 +22,7 @@ use crate::ast::ImmOrReg;
 use io::*;
 
 use self::debug::Breakpoint;
-use self::mem::{AssertInit as _, Mem, MemAccessCtx, RegFile, Word};
+use self::mem::{AssertInit as _, Mem, MemAccessCtx, RegFile, Word, WordCreateStrategy};
 
 /// Errors that can occur during simulation.
 #[derive(Debug)]
@@ -161,18 +161,22 @@ pub struct Simulator {
     hit_breakpoint: bool,
 
     /// Indicates whether the OS has been loaded.
-    os_loaded: bool
+    os_loaded: bool,
+
+    /// The creation strategy for uninitialized Words.
+    /// 
+    /// This is used to initialize the `mem` and `reg_file` fields.
+    word_create_strategy: WordCreateStrategy,
 }
+impl Simulator where Simulator: Send {}
 
 impl Simulator {
-    /// Creates a new simulator with the provided initializers.
-    fn create_with(
-        mem_init: impl FnOnce() -> Mem,
-        reg_init: impl FnOnce() -> RegFile
-    ) -> Self {
-        Self {
-            mem: mem_init(),
-            reg_file: reg_init(),
+    /// Creates a new simulator with the provided initializers
+    /// and with the OS loaded, but without a loaded object file.
+    pub fn new(mut strat: WordCreateStrategy) -> Self {
+        let mut sim = Self {
+            mem: Mem::new(&mut strat),
+            reg_file: RegFile::new(&mut strat),
             pc: 0x3000,
             psr: PSR::new(),
             saved_sp: Word::new_init(0x3000),
@@ -183,25 +187,17 @@ impl Simulator {
             breakpoints: vec![],
             prefetch: false,
             hit_breakpoint: false,
-            os_loaded: false
-        }
-    }
-    /// Creates a new simulator, with randomized memory 
-    /// and with the OS loaded, but without a loaded object file.
-    pub fn new() -> Self {
-        let mut sim = Self::create_with(Mem::new, RegFile::new);
+            os_loaded: false,
+            word_create_strategy: strat
+        };
+
         sim.load_os();
         sim
-    }
-    /// Creates a new simulator that is completely zeroed out.
-    pub fn zeroed() -> Self {
-        Self::create_with(Mem::zeroed, RegFile::zeroed)
     }
 
     /// Loads and initializes the operating system.
     /// 
-    /// This is done automatically with [`Simulator::new`], but
-    /// not with [`Simulator::zeroed`].
+    /// Note that this is done automatically with [`Simulator::new`].
     /// 
     /// This will initialize kernel space and create trap handlers,
     /// however it will not load working IO. This can cause IO
@@ -246,7 +242,7 @@ impl Simulator {
         let mut alloca = Vec::with_capacity(obj.len());
 
         for (start, words) in obj.iter() {
-            self.mem.copy_block(start, words);
+            self.mem.copy_obj_block(start, words);
 
             // add this block to alloca
             let len = words.len() as u16;
@@ -650,7 +646,7 @@ impl Simulator {
 }
 impl Default for Simulator {
     fn default() -> Self {
-        Self::new()
+        Self::new(Default::default())
     }
 }
 
