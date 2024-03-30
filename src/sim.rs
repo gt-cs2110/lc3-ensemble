@@ -174,6 +174,7 @@ impl Simulator {
     /// Creates a new simulator with the provided initializers
     /// and with the OS loaded, but without a loaded object file.
     pub fn new(mut strat: WordCreateStrategy) -> Self {
+        strat.reset();
         let mut sim = Self {
             mem: Mem::new(&mut strat),
             reg_file: RegFile::new(&mut strat),
@@ -222,6 +223,21 @@ impl Simulator {
             self.load_obj_file(obj);
             self.os_loaded = true;
         }
+    }
+    
+    /// Resets the simulator.
+    /// 
+    /// This sets the simulator back to the state it was in when [`Simulator::new`] was called.
+    /// Essentially, this resets all state fields back to their defaults,
+    /// and the memory and register file back to their original initialization values 
+    /// (unless the creation strategy used to initialize this [`Simulator`] was [`WordCreateStrategy::Unseeded`]).
+    pub fn reset(&mut self) {
+        // FIXME: Do these need to be preserved:
+        // Breakpoints
+        // IO state
+
+        let strat = std::mem::replace(&mut self.word_create_strategy, WordCreateStrategy::Known(0));
+        *self = Simulator::new(strat);
     }
     
     /// Sets and initializes the IO handler.
