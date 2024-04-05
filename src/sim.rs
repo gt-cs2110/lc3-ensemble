@@ -168,7 +168,7 @@ pub struct Simulator {
     /// This is used to initialize the `mem` and `reg_file` fields.
     word_create_strategy: WordCreateStrategy,
 }
-impl Simulator where Simulator: Send {}
+impl Simulator where Simulator: Send + Sync {}
 
 impl Simulator {
     /// Creates a new simulator with the provided initializers
