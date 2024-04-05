@@ -99,8 +99,7 @@ impl ObjectFile {
         let mut nl_indices = None;
         let mut src = None;
 
-        while !vec.is_empty() {
-            let Some((ident_byte, rest)) = vec.split_first() else { unreachable!() };
+        while let Some((ident_byte, rest)) = vec.split_first() {
             vec = rest;
             match ident_byte {
                 0x00 => {

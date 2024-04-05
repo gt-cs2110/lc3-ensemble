@@ -466,7 +466,7 @@ impl SymbolTable {
 
     /// Gets the address of a given source line.
     /// 
-    /// This function requires debug symbols to be enabled.
+    /// If debug symbols are not enabled, this unconditionally returns `None`.
     pub fn get_line(&self, line: usize) -> Option<u16> {
         self.line_map.get(line)
     }
@@ -476,12 +476,12 @@ impl SymbolTable {
     /// The result can be converted into a source span (range of characters encompassed by the instruction)
     /// using [`SymbolTable::source_info`] and [`SourceInfo::line_span`].
     /// 
-    /// This function requires debug symbols to be enabled.
+    /// If debug symbols are not enabled, this unconditionally returns `None`.
     pub fn find_line_source(&self, addr: u16) -> Option<usize> {
         self.line_map.find(addr)
     }
 
-    /// Reads the source info from this symbol table (if it debug symbols are enabled).
+    /// Reads the source info from this symbol table (if debug symbols are enabled).
     pub fn source_info(&self) -> Option<&SourceInfo> {
         self.src_info.as_ref()
     }

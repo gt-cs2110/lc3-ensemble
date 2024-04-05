@@ -11,12 +11,12 @@ use crossbeam_channel as cbc;
 /// 
 /// let queue = BlockingQueue::new(None);
 /// 
-/// // fn write(_: u8) -> Result<(), Stop> { ... }
+/// // fn writer(_: u8) -> Result<(), Stop> { ... }
 /// // let mcr = ...
-/// # fn write(_: u8) -> Result<(), Stop> { Ok(()) }
+/// # fn writer(_: u8) -> Result<(), Stop> { Ok(()) }
 /// # let mcr = std::sync::Arc::default();
 /// 
-/// let io = BiChannelIO::new(queue.reader(), |byte| write(byte), mcr);
+/// let io = BiChannelIO::new(queue.reader(), writer, mcr);
 /// ```
 /// 
 /// [`BiChannelIO`]: super::BiChannelIO
