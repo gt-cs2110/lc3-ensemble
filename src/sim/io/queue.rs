@@ -91,6 +91,15 @@ impl<T> BlockingQueue<T> {
         self.tail.clone()
     }
 
+    /// Returns the number of bytes currently in the channel.
+    pub fn len(&self) -> usize {
+        self.head.len()
+    }
+    /// Returns whether there are any bytes in the channel (`true` if not).
+    pub fn is_empty(&self) -> bool {
+        self.head.is_empty()
+    }
+
     /// A utility to allow this queue to interop with [`BiChannelIO`].
     /// 
     /// This can be used as the `reader` parameter of [`BiChannelIO::new`]
