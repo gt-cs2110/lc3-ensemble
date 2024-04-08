@@ -191,6 +191,11 @@ pub struct Simulator {
     /// Breakpoints for the simulator.
     pub breakpoints: Vec<Breakpoint>,
 
+    /// The number of instructions successfully run since this `Simulator` was initialized.
+    /// 
+    /// This can be set to 0 to reset the counter.
+    pub instructions_run: u64,
+
     /// Indicates whether the PC has been incremented in the fetch stage yet.
     /// 
     /// This is just for error handling purposes. It's used to compute
@@ -226,6 +231,7 @@ impl Simulator {
             alloca: Box::new([]),
             mcr: Arc::default(),
             breakpoints: vec![],
+            instructions_run: 0,
             prefetch: false,
             hit_breakpoint: false,
             os_loaded: false,
@@ -489,6 +495,12 @@ impl Simulator {
     pub fn run(&mut self) -> Result<(), SimErr> {
         self.run_while(|_| true)
     }
+
+    /// Execute the program with a limit on how many steps to execute.
+    pub fn run_with_limit(&mut self, max_steps: u64) -> Result<(), SimErr> {
+        let i = self.instructions_run;
+        self.run_while(|sim| sim.instructions_run.wrapping_sub(i) < max_steps)
+    }
     
     /// Simulate one step, executing one instruction.
     /// 
@@ -661,6 +673,7 @@ impl Simulator {
             },
         }
 
+        self.instructions_run = self.instructions_run.wrapping_add(1);
         Ok(())
     }
 
