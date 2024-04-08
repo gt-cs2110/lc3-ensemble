@@ -688,30 +688,22 @@ impl Simulator {
     /// Simulate one step, executing one instruction and running through entire subroutines as a single step.
     pub fn step_over(&mut self) -> Result<(), SimErr> {
         let curr_frame = self.sr_entered;
+        let mut first = Some(()); // is Some if this is the first instruction executed in this call
 
-        // always do at least one step
-        match self.step() {
-            Err(SimErr::ProgramHalted) => return Ok(()),
-            r => r?
-        };
-        
-        // run until we have landed back in the same frame
-        self.run_while(|sim| curr_frame < sim.sr_entered)
+        // this function should do at least one step before checking its condition
+        // condition: run until we have landed back in the same frame
+        self.run_while(|sim| first.take().is_some() || curr_frame < sim.sr_entered)
     }
 
     /// Run through the simulator's execution until the subroutine is exited.
     pub fn step_out(&mut self) -> Result<(), SimErr> {
         let curr_frame = self.sr_entered;
-
-        // always do at least one step
-        match self.step() {
-            Err(SimErr::ProgramHalted) => return Ok(()),
-            r => r?
-        };
+        let mut first = Some(()); // is Some if this is the first instruction executed in this call
         
-        // run until we have landed in a smaller frame
+        // this function should do at least one step before checking its condition
+        // condition: run until we've landed in a smaller frame
         if curr_frame != 0 {
-            self.run_while(|sim| curr_frame <= sim.sr_entered)?;
+            self.run_while(|sim| first.take().is_some() || curr_frame <= sim.sr_entered)?;
         }
 
         Ok(())
