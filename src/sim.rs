@@ -22,7 +22,7 @@ use crate::ast::ImmOrReg;
 use io::*;
 
 use self::debug::Breakpoint;
-use self::mem::{AssertInit as _, Mem, MemAccessCtx, RegFile, Word, WordCreateStrategy};
+use self::mem::{AssertInit as _, Mem, MemAccessCtx, RegFile, Word};
 
 /// Errors that can occur during simulation.
 #[derive(Debug)]
@@ -91,6 +91,64 @@ impl std::fmt::Display for SimErr {
 }
 impl std::error::Error for SimErr {}
 
+/// Strategy used to initialize the `reg_file` and `mem` of the [`Simulator`].
+/// 
+/// These are used to set the initial state of the memory and registers,
+/// which will be treated as uninitialized until they are properly initialized
+/// by program code.
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+pub enum WordCreateStrategy {
+    /// Initializes each word randomly and non-deterministically.
+    #[default]
+    Unseeded,
+
+    /// Initializes each word randomly and deterministically.
+    Seeded {
+        /// The seed the RNG was initialized with.
+        seed: u64
+    },
+
+    /// Generates a random value with the given seed and sets each word to that generated value.
+    SeededFill {
+        /// The seed the RNG was initialized with.
+        seed: u64
+    },
+
+    /// Initializes each word to a known value.
+    Known {
+        /// The value to initialize each value to.
+        value: u16
+    }
+}
+
+impl WordCreateStrategy {
+    fn generator(&self) -> WCGenerator {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        match self {
+            WordCreateStrategy::Unseeded => WCGenerator::Unseeded,
+            WordCreateStrategy::Seeded { seed } => WCGenerator::Seeded(Box::new(StdRng::seed_from_u64(*seed))),
+            WordCreateStrategy::SeededFill { seed } => WCGenerator::Known(StdRng::seed_from_u64(*seed).gen()),
+            WordCreateStrategy::Known { value } => WCGenerator::Known(*value),
+        }
+    }
+}
+
+enum WCGenerator {
+    Unseeded,
+    Seeded(Box<rand::rngs::StdRng>),
+    Known(u16)
+}
+impl mem::WordFiller for WCGenerator {
+    fn generate(&mut self) -> u16 {
+        match self {
+            WCGenerator::Unseeded  => ().generate(),
+            WCGenerator::Seeded(r) => r.generate(),
+            WCGenerator::Known(k)  => k.generate(),
+        }
+    }
+}
 /// Configuration flags for [`Simulator`].
 /// 
 /// These can be modified after the `Simulator` is created with [`Simulator::new`]
@@ -116,6 +174,11 @@ pub struct SimFlags {
     /// Real HALT is useful for maintaining integrity to the LC-3 ISA, whereas
     /// virtual HALT preserves the state of the machine prior to calling the OS's HALT routine.
     pub use_real_halt: bool,
+    
+    /// The creation strategy for uninitialized Words.
+    /// 
+    /// This is used to initialize the `mem` and `reg_file` fields.
+    pub word_create_strat: WordCreateStrategy
 }
 impl Default for SimFlags {
     /// The default flags.
@@ -124,7 +187,7 @@ impl Default for SimFlags {
     /// - `strict`: false
     /// - `use_real_halt`: false
     fn default() -> Self {
-        Self { strict: false, use_real_halt: false }
+        Self { strict: false, use_real_halt: false, word_create_strat: Default::default() }
     }
 }
 
@@ -206,36 +269,31 @@ pub struct Simulator {
     hit_breakpoint: bool,
 
     /// Indicates whether the OS has been loaded.
-    os_loaded: bool,
-
-    /// The creation strategy for uninitialized Words.
-    /// 
-    /// This is used to initialize the `mem` and `reg_file` fields.
-    word_create_strategy: WordCreateStrategy,
+    os_loaded: bool
 }
 impl Simulator where Simulator: Send + Sync {}
 
 impl Simulator {
     /// Creates a new simulator with the provided initializers
     /// and with the OS loaded, but without a loaded object file.
-    pub fn new(mut strat: WordCreateStrategy) -> Self {
-        strat.reset();
+    pub fn new(flags: SimFlags) -> Self {
+        let mut filler = flags.word_create_strat.generator();
+
         let mut sim = Self {
-            mem: Mem::new(&mut strat),
-            reg_file: RegFile::new(&mut strat),
+            mem: Mem::new(&mut filler),
+            reg_file: RegFile::new(&mut filler),
             pc: 0x3000,
             psr: PSR::new(),
             saved_sp: Word::new_init(0x3000),
             sr_entered: 0,
-            flags: Default::default(),
+            flags,
             alloca: Box::new([]),
             mcr: Arc::default(),
             breakpoints: vec![],
             instructions_run: 0,
             prefetch: false,
             hit_breakpoint: false,
-            os_loaded: false,
-            word_create_strategy: strat
+            os_loaded: false
         };
 
         sim.load_os();
@@ -283,9 +341,7 @@ impl Simulator {
         // IO state
 
         let flags = self.flags;
-        let strat = std::mem::replace(&mut self.word_create_strategy, WordCreateStrategy::Known(0));
-        *self = Simulator::new(strat);
-        self.flags = flags;
+        *self = Simulator::new(flags);
     }
     
     /// Sets and initializes the IO handler.
